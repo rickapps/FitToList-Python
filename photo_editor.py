@@ -1,12 +1,173 @@
+import json
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import messagebox, ttk
 
 from PIL import Image, ImageTk
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
 SELECTION_BORDER_MARGIN = 6  # canvas px within which a border-hover/resize is detected
 SELECTION_MIN_SIZE = 4       # minimum selection width/height in canvas px while resizing
+
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".fittolist")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(config):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(config, f)
+    except OSError:
+        pass
+
+
+class DirectoryPicker(tk.Toplevel):
+    """Modal folder browser whose result always matches the path on screen.
+
+    Tk's native directory chooser resolves "OK" differently depending on the
+    exact click sequence (a highlighted row vs. the directory currently
+    browsed into), which can silently return a folder other than the one
+    displayed. This picker shows the whole folder hierarchy as an expandable
+    tree (children are loaded lazily, on expand) and keeps the path label in
+    sync with whichever folder is highlighted - that's always what
+    "Select This Folder" returns.
+    """
+
+    _PLACEHOLDER_SUFFIX = "\x00placeholder"
+
+    def __init__(self, parent, initial_dir, title="Select Folder"):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("480x480")
+        self.transient(parent)
+        self.result = None
+
+        if initial_dir and os.path.isdir(initial_dir):
+            target_dir = os.path.abspath(initial_dir)
+        else:
+            target_dir = os.path.abspath(os.path.expanduser("~"))
+
+        self.path_var = tk.StringVar()
+        path_label = tk.Label(
+            self, textvariable=self.path_var, anchor="w", relief=tk.SUNKEN, wraplength=460
+        )
+        path_label.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        tree_container = tk.Frame(self)
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        scrollbar = tk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        self.tree = ttk.Treeview(tree_container, show="tree", selectmode="browse", yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.tree.bind("<<TreeviewOpen>>", self._on_open)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        btn_frame = tk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=8, pady=8)
+        tk.Button(btn_frame, text="Select This Folder", command=self._select).pack(
+            side=tk.RIGHT, padx=(4, 0)
+        )
+        tk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side=tk.RIGHT)
+
+        root_path = os.path.abspath(os.sep)
+        self._insert_node("", root_path, text=root_path)
+        self._expand_to(target_dir)
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.grab_set()
+        self.focus_set()
+
+    # ---------- tree population ----------
+    @staticmethod
+    def _list_subdirs(path):
+        try:
+            return sorted(
+                f for f in os.listdir(path) if not f.startswith(".") and os.path.isdir(os.path.join(path, f))
+            )
+        except OSError:
+            return []
+
+    @classmethod
+    def _has_subdirs(cls, path):
+        try:
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False):
+                        return True
+        except OSError:
+            pass
+        return False
+
+    def _insert_node(self, parent_iid, path, text):
+        self.tree.insert(parent_iid, tk.END, iid=path, text=text)
+        if self._has_subdirs(path):
+            self.tree.insert(path, tk.END, iid=path + self._PLACEHOLDER_SUFFIX, text="")
+
+    def _populate_children(self, iid):
+        children = self.tree.get_children(iid)
+        if len(children) == 1 and children[0] == iid + self._PLACEHOLDER_SUFFIX:
+            self.tree.delete(children[0])
+            for name in self._list_subdirs(iid):
+                self._insert_node(iid, os.path.join(iid, name), text=name)
+
+    def _expand_to(self, target_path):
+        ancestors = []
+        path = target_path
+        root_path = os.path.abspath(os.sep)
+        while True:
+            ancestors.append(path)
+            if path == root_path:
+                break
+            parent = os.path.dirname(path)
+            if parent == path:
+                break
+            path = parent
+        for path in reversed(ancestors):
+            if not self.tree.exists(path):
+                return
+            self._populate_children(path)
+            self.tree.item(path, open=True)
+        self.tree.selection_set(target_path)
+        self.tree.see(target_path)
+        self.tree.focus(target_path)
+        self.path_var.set(target_path)
+
+    # ---------- event handlers ----------
+    def _on_open(self, event):
+        iid = self.tree.focus()
+        if iid:
+            self._populate_children(iid)
+
+    def _on_select(self, event):
+        selection = self.tree.selection()
+        if selection and not selection[0].endswith(self._PLACEHOLDER_SUFFIX):
+            self.path_var.set(selection[0])
+
+    def _select(self):
+        candidate = self.path_var.get()
+        if candidate and os.path.isdir(candidate):
+            self.result = candidate
+        self.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.destroy()
+
+
+def choose_directory(parent, initial_dir, title="Select Folder"):
+    picker = DirectoryPicker(parent, initial_dir, title)
+    parent.wait_window(picker)
+    return picker.result
 
 
 class PhotoEditorApp(tk.Tk):
@@ -16,7 +177,9 @@ class PhotoEditorApp(tk.Tk):
         self.geometry("1000x700")
         self.minsize(600, 400)
 
-        self.current_folder = os.getcwd()
+        config = load_config()
+        self.source_folder = config.get("source_folder") or os.getcwd()
+        self.target_folder = config.get("target_folder")
         self.image_path = None
         self.original_image = None   # PIL.Image as loaded from disk
         self.current_image = None    # PIL.Image after edits
@@ -38,7 +201,8 @@ class PhotoEditorApp(tk.Tk):
         menubar = tk.Menu(self)
         file_menu = tk.Menu(menubar, tearoff=False)
         file_menu.add_command(label="Open Folder...", command=self.open_folder)
-        file_menu.add_command(label="Save As...", command=self.save_as)
+        file_menu.add_command(label="Set Target Folder...", command=self.choose_target_folder)
+        file_menu.add_command(label="Save", command=self.save)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -62,12 +226,24 @@ class PhotoEditorApp(tk.Tk):
 
     def _build_left_pane(self, parent):
         self.folder_label = tk.Label(
-            parent, text=self.current_folder, anchor="w", wraplength=230, justify="left"
+            parent, text=self.source_folder, anchor="w", wraplength=230, justify="left"
         )
         self.folder_label.pack(fill=tk.X, padx=5, pady=(5, 0))
 
         open_btn = tk.Button(parent, text="Open Folder...", command=self.open_folder)
-        open_btn.pack(fill=tk.X, padx=5, pady=5)
+        open_btn.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+        self.target_folder_label = tk.Label(
+            parent,
+            text=self.target_folder or "Target folder not set",
+            anchor="w",
+            wraplength=230,
+            justify="left",
+        )
+        self.target_folder_label.pack(fill=tk.X, padx=5, pady=(5, 0))
+
+        target_btn = tk.Button(parent, text="Set Target Folder...", command=self.choose_target_folder)
+        target_btn.pack(fill=tk.X, padx=5, pady=5)
 
         list_container = tk.Frame(parent)
         list_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
@@ -96,7 +272,7 @@ class PhotoEditorApp(tk.Tk):
         tk.Button(controls, text="Reset", command=self.reset_image).grid(
             row=0, column=2, padx=2, pady=2, sticky="ew"
         )
-        tk.Button(controls, text="Save As...", command=self.save_as).grid(
+        tk.Button(controls, text="Save", command=self.save).grid(
             row=0, column=3, padx=2, pady=2, sticky="ew"
         )
 
@@ -132,13 +308,17 @@ class PhotoEditorApp(tk.Tk):
         status_bar = tk.Label(parent, textvariable=self.status_var, anchor="w", relief=tk.SUNKEN)
         status_bar.pack(fill=tk.X, padx=5, pady=(0, 5))
 
+    # ---------- Folder persistence ----------
+    def _persist_config(self):
+        save_config({"source_folder": self.source_folder, "target_folder": self.target_folder})
+
     # ---------- File listing ----------
     def _populate_file_list(self):
         self.file_listbox.delete(0, tk.END)
         try:
             names = sorted(
                 f
-                for f in os.listdir(self.current_folder)
+                for f in os.listdir(self.source_folder)
                 if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
             )
         except OSError as exc:
@@ -148,20 +328,35 @@ class PhotoEditorApp(tk.Tk):
             self.file_listbox.insert(tk.END, name)
 
     def open_folder(self):
-        folder = filedialog.askdirectory(initialdir=self.current_folder)
+        folder = choose_directory(self, self.source_folder, title="Select Source Folder")
         if not folder:
             return
-        self.current_folder = folder
-        self.folder_label.config(text=self.current_folder)
+        if self.target_folder and os.path.abspath(folder) == os.path.abspath(self.target_folder):
+            messagebox.showerror("Source Folder", "Source folder cannot be the same as the target folder.")
+            return
+        self.source_folder = folder
+        self.folder_label.config(text=self.source_folder)
         self._populate_file_list()
         self._clear_image_state()
+        self._persist_config()
+
+    def choose_target_folder(self):
+        folder = choose_directory(self, self.target_folder or self.source_folder, title="Select Target Folder")
+        if not folder:
+            return
+        if os.path.abspath(folder) == os.path.abspath(self.source_folder):
+            messagebox.showerror("Target Folder", "Target folder cannot be the same as the source folder.")
+            return
+        self.target_folder = folder
+        self.target_folder_label.config(text=self.target_folder)
+        self._persist_config()
 
     def on_file_selected(self, event):
         selection = self.file_listbox.curselection()
         if not selection:
             return
         filename = self.file_listbox.get(selection[0])
-        path = os.path.join(self.current_folder, filename)
+        path = os.path.join(self.source_folder, filename)
         self._load_image(path)
 
     # ---------- Image loading / display ----------
@@ -391,25 +586,15 @@ class PhotoEditorApp(tk.Tk):
         self._redraw()
         self.status_var.set(f"Reset - {self.current_image.width} x {self.current_image.height}")
 
-    def save_as(self):
+    def save(self):
         if self.current_image is None:
-            messagebox.showinfo("Save As", "No image loaded to save.")
+            messagebox.showinfo("Save", "No image loaded to save.")
             return
-        initial_name = "edited_" + os.path.basename(self.image_path or "image.png")
-        path = filedialog.asksaveasfilename(
-            initialdir=self.current_folder,
-            initialfile=initial_name,
-            defaultextension=os.path.splitext(initial_name)[1] or ".png",
-            filetypes=[
-                ("PNG", "*.png"),
-                ("JPEG", "*.jpg *.jpeg"),
-                ("BMP", "*.bmp"),
-                ("GIF", "*.gif"),
-                ("All files", "*.*"),
-            ],
-        )
-        if not path:
+        if not self.target_folder:
+            messagebox.showwarning("Save", "Please set a target folder first.")
             return
+        filename = os.path.basename(self.image_path)
+        path = os.path.join(self.target_folder, filename)
         try:
             image_to_save = self.current_image
             if os.path.splitext(path)[1].lower() in (".jpg", ".jpeg") and image_to_save.mode in ("RGBA", "P"):
@@ -418,9 +603,7 @@ class PhotoEditorApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Error", f"Could not save image:\n{exc}")
             return
-        messagebox.showinfo("Save As", f"Saved to {path}")
-        if os.path.dirname(path) == self.current_folder:
-            self._populate_file_list()
+        messagebox.showinfo("Save", f"Saved to {path}")
 
 
 def main():
