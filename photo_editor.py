@@ -266,14 +266,11 @@ class PhotoEditorApp(tk.Tk):
         tk.Button(controls, text="Crop to Selection", command=self.apply_crop).grid(
             row=0, column=0, padx=2, pady=2, sticky="ew"
         )
-        tk.Button(controls, text="Clear Selection", command=self.clear_selection).grid(
+        tk.Button(controls, text="Reset", command=self.reset_image).grid(
             row=0, column=1, padx=2, pady=2, sticky="ew"
         )
-        tk.Button(controls, text="Reset", command=self.reset_image).grid(
-            row=0, column=2, padx=2, pady=2, sticky="ew"
-        )
         tk.Button(controls, text="Save", command=self.save).grid(
-            row=0, column=3, padx=2, pady=2, sticky="ew"
+            row=0, column=2, columnspan=2, padx=2, pady=2, sticky="ew"
         )
 
         tk.Label(controls, text="Resize:").grid(row=1, column=0, padx=2, pady=2, sticky="w")
