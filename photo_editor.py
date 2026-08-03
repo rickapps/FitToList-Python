@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import tkinter as tk
@@ -42,14 +43,13 @@ class DirectoryPicker(tk.Toplevel):
     "Select This Folder" returns.
     """
 
-    _PLACEHOLDER_SUFFIX = "\x00placeholder"
-
     def __init__(self, parent, initial_dir, title="Select Folder"):
         super().__init__(parent)
         self.title(title)
         self.geometry("480x480")
         self.transient(parent)
         self.result = None
+        self._placeholder_iids = set()
 
         if initial_dir and os.path.isdir(initial_dir):
             target_dir = os.path.abspath(initial_dir)
@@ -79,8 +79,8 @@ class DirectoryPicker(tk.Toplevel):
         )
         tk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side=tk.RIGHT)
 
-        root_path = os.path.abspath(os.sep)
-        self._insert_node("", root_path, text=root_path)
+        for root_path in self._list_roots():
+            self._insert_node("", root_path, text=root_path)
         self._expand_to(target_dir)
 
         self.protocol("WM_DELETE_WINDOW", self._cancel)
@@ -88,6 +88,17 @@ class DirectoryPicker(tk.Toplevel):
         self.focus_set()
 
     # ---------- tree population ----------
+    @staticmethod
+    def _list_roots():
+        """Return the top-level nodes for the tree: drive letters on Windows,
+        or the filesystem root everywhere else."""
+        if os.name == "nt":
+            # GetLogicalDrives() reports mounted drive letters without touching
+            # removable media, so it won't trigger "insert disk" prompts.
+            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+            return [f"{chr(ord('A') + i)}:\\" for i in range(26) if bitmask & (1 << i)]
+        return [os.sep]
+
     @staticmethod
     def _list_subdirs(path):
         try:
@@ -111,23 +122,23 @@ class DirectoryPicker(tk.Toplevel):
     def _insert_node(self, parent_iid, path, text):
         self.tree.insert(parent_iid, tk.END, iid=path, text=text)
         if self._has_subdirs(path):
-            self.tree.insert(path, tk.END, iid=path + self._PLACEHOLDER_SUFFIX, text="")
+            placeholder = self.tree.insert(path, tk.END, text="")
+            self._placeholder_iids.add(placeholder)
 
     def _populate_children(self, iid):
         children = self.tree.get_children(iid)
-        if len(children) == 1 and children[0] == iid + self._PLACEHOLDER_SUFFIX:
-            self.tree.delete(children[0])
+        if len(children) == 1 and children[0] in self._placeholder_iids:
+            placeholder = children[0]
+            self.tree.delete(placeholder)
+            self._placeholder_iids.discard(placeholder)
             for name in self._list_subdirs(iid):
                 self._insert_node(iid, os.path.join(iid, name), text=name)
 
     def _expand_to(self, target_path):
         ancestors = []
         path = target_path
-        root_path = os.path.abspath(os.sep)
         while True:
             ancestors.append(path)
-            if path == root_path:
-                break
             parent = os.path.dirname(path)
             if parent == path:
                 break
@@ -150,7 +161,7 @@ class DirectoryPicker(tk.Toplevel):
 
     def _on_select(self, event):
         selection = self.tree.selection()
-        if selection and not selection[0].endswith(self._PLACEHOLDER_SUFFIX):
+        if selection and selection[0] not in self._placeholder_iids:
             self.path_var.set(selection[0])
 
     def _select(self):
