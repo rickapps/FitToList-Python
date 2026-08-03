@@ -31,61 +31,38 @@ def save_config(config):
         pass
 
 
-class DirectoryPicker(tk.Toplevel):
-    """Modal folder browser whose result always matches the path on screen.
+class FolderTreeFrame(tk.Frame):
+    """Expandable folder tree (children loaded lazily, on expand) that keeps
+    `path_var` in sync with whichever folder is highlighted.
 
     Tk's native directory chooser resolves "OK" differently depending on the
     exact click sequence (a highlighted row vs. the directory currently
     browsed into), which can silently return a folder other than the one
-    displayed. This picker shows the whole folder hierarchy as an expandable
-    tree (children are loaded lazily, on expand) and keeps the path label in
-    sync with whichever folder is highlighted - that's always what
-    "Select This Folder" returns.
+    displayed. Driving everything off the highlighted tree node avoids that
+    mismatch - `path_var` is always what's on screen.
     """
 
-    def __init__(self, parent, initial_dir, title="Select Folder"):
+    def __init__(self, parent, initial_dir):
         super().__init__(parent)
-        self.title(title)
-        self.geometry("480x480")
-        self.transient(parent)
-        self.result = None
         self._placeholder_iids = set()
-
-        if initial_dir and os.path.isdir(initial_dir):
-            target_dir = os.path.abspath(initial_dir)
-        else:
-            target_dir = os.path.abspath(os.path.expanduser("~"))
-
         self.path_var = tk.StringVar()
-        path_label = tk.Label(
-            self, textvariable=self.path_var, anchor="w", relief=tk.SUNKEN, wraplength=460
-        )
-        path_label.pack(fill=tk.X, padx=8, pady=(8, 4))
 
-        tree_container = tk.Frame(self)
-        tree_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
-        scrollbar = tk.Scrollbar(tree_container, orient=tk.VERTICAL)
-        self.tree = ttk.Treeview(tree_container, show="tree", selectmode="browse", yscrollcommand=scrollbar.set)
+        scrollbar = tk.Scrollbar(self, orient=tk.VERTICAL)
+        self.tree = ttk.Treeview(self, show="tree", selectmode="browse", yscrollcommand=scrollbar.set)
         scrollbar.config(command=self.tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.tree.bind("<<TreeviewOpen>>", self._on_open)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
-        btn_frame = tk.Frame(self)
-        btn_frame.pack(fill=tk.X, padx=8, pady=8)
-        tk.Button(btn_frame, text="Select This Folder", command=self._select).pack(
-            side=tk.RIGHT, padx=(4, 0)
-        )
-        tk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side=tk.RIGHT)
+        if initial_dir and os.path.isdir(initial_dir):
+            target_dir = os.path.abspath(initial_dir)
+        else:
+            target_dir = os.path.abspath(os.path.expanduser("~"))
 
         for root_path in self._list_roots():
             self._insert_node("", root_path, text=root_path)
         self._expand_to(target_dir)
-
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
-        self.grab_set()
-        self.focus_set()
 
     # ---------- tree population ----------
     @staticmethod
@@ -164,21 +141,80 @@ class DirectoryPicker(tk.Toplevel):
         if selection and selection[0] not in self._placeholder_iids:
             self.path_var.set(selection[0])
 
-    def _select(self):
-        candidate = self.path_var.get()
-        if candidate and os.path.isdir(candidate):
-            self.result = candidate
+
+class FolderSelectionDialog(tk.Toplevel):
+    """Modal dialog for choosing both the source and target folders at once.
+
+    Read-only boxes at the top always mirror whichever folder is highlighted
+    in the active tab's tree, so what's on screen is always what Save uses -
+    same guarantee `FolderTreeFrame` provides for a single folder.
+    """
+
+    def __init__(self, parent, initial_source, initial_target):
+        super().__init__(parent)
+        self.title("Select Folders")
+        self.geometry("480x560")
+        self.transient(parent)
+        self.result = None
+
+        display_frame = tk.Frame(self)
+        display_frame.pack(fill=tk.X, padx=8, pady=(8, 4))
+        display_frame.grid_columnconfigure(1, weight=1)
+
+        tk.Label(display_frame, text="Source:").grid(row=0, column=0, sticky="w")
+        tk.Label(display_frame, text="Target:").grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        source_tab = tk.Frame(notebook)
+        target_tab = tk.Frame(notebook)
+        notebook.add(source_tab, text="Source")
+        notebook.add(target_tab, text="Target")
+
+        self.source_tree = FolderTreeFrame(source_tab, initial_source)
+        self.source_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.target_tree = FolderTreeFrame(target_tab, initial_target or initial_source)
+        self.target_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        source_entry = tk.Entry(
+            display_frame, textvariable=self.source_tree.path_var, state="readonly"
+        )
+        source_entry.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        target_entry = tk.Entry(
+            display_frame, textvariable=self.target_tree.path_var, state="readonly"
+        )
+        target_entry.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(4, 0))
+
+        btn_frame = tk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=8, pady=8)
+        tk.Button(btn_frame, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(4, 0))
+        tk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side=tk.RIGHT)
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.grab_set()
+        self.focus_set()
+
+    def _save(self):
+        source = self.source_tree.path_var.get()
+        target = self.target_tree.path_var.get()
+        if not source or not os.path.isdir(source):
+            messagebox.showerror("Select Folders", "Please select a valid source folder.", parent=self)
+            return
+        if not target or not os.path.isdir(target):
+            messagebox.showerror("Select Folders", "Please select a valid target folder.", parent=self)
+            return
+        if os.path.abspath(source) == os.path.abspath(target):
+            messagebox.showerror(
+                "Select Folders", "Source folder cannot be the same as the target folder.", parent=self
+            )
+            return
+        self.result = (source, target)
         self.destroy()
 
     def _cancel(self):
         self.result = None
         self.destroy()
-
-
-def choose_directory(parent, initial_dir, title="Select Folder"):
-    picker = DirectoryPicker(parent, initial_dir, title)
-    parent.wait_window(picker)
-    return picker.result
 
 
 class PhotoEditorApp(tk.Tk):
@@ -211,8 +247,7 @@ class PhotoEditorApp(tk.Tk):
     def _build_menu(self):
         menubar = tk.Menu(self)
         file_menu = tk.Menu(menubar, tearoff=False)
-        file_menu.add_command(label="Open Folder...", command=self.open_folder)
-        file_menu.add_command(label="Set Target Folder...", command=self.choose_target_folder)
+        file_menu.add_command(label="Select Folders...", command=self.select_folders)
         file_menu.add_command(label="Save", command=self.save)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.destroy)
@@ -241,9 +276,6 @@ class PhotoEditorApp(tk.Tk):
         )
         self.folder_label.pack(fill=tk.X, padx=5, pady=(5, 0))
 
-        open_btn = tk.Button(parent, text="Open Folder...", command=self.open_folder)
-        open_btn.pack(fill=tk.X, padx=5, pady=(0, 5))
-
         self.target_folder_label = tk.Label(
             parent,
             text=self.target_folder or "Target folder not set",
@@ -253,8 +285,8 @@ class PhotoEditorApp(tk.Tk):
         )
         self.target_folder_label.pack(fill=tk.X, padx=5, pady=(5, 0))
 
-        target_btn = tk.Button(parent, text="Set Target Folder...", command=self.choose_target_folder)
-        target_btn.pack(fill=tk.X, padx=5, pady=5)
+        folders_btn = tk.Button(parent, text="Select Folders...", command=self.select_folders)
+        folders_btn.pack(fill=tk.X, padx=5, pady=5)
 
         list_container = tk.Frame(parent)
         list_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
@@ -335,28 +367,20 @@ class PhotoEditorApp(tk.Tk):
         for name in names:
             self.file_listbox.insert(tk.END, name)
 
-    def open_folder(self):
-        folder = choose_directory(self, self.source_folder, title="Select Source Folder")
-        if not folder:
+    def select_folders(self):
+        dialog = FolderSelectionDialog(self, self.source_folder, self.target_folder)
+        self.wait_window(dialog)
+        if dialog.result is None:
             return
-        if self.target_folder and os.path.abspath(folder) == os.path.abspath(self.target_folder):
-            messagebox.showerror("Source Folder", "Source folder cannot be the same as the target folder.")
-            return
-        self.source_folder = folder
+        new_source, new_target = dialog.result
+        source_changed = os.path.abspath(new_source) != os.path.abspath(self.source_folder)
+        self.source_folder = new_source
+        self.target_folder = new_target
         self.folder_label.config(text=self.source_folder)
-        self._populate_file_list()
-        self._clear_image_state()
-        self._persist_config()
-
-    def choose_target_folder(self):
-        folder = choose_directory(self, self.target_folder or self.source_folder, title="Select Target Folder")
-        if not folder:
-            return
-        if os.path.abspath(folder) == os.path.abspath(self.source_folder):
-            messagebox.showerror("Target Folder", "Target folder cannot be the same as the source folder.")
-            return
-        self.target_folder = folder
         self.target_folder_label.config(text=self.target_folder)
+        if source_changed:
+            self._populate_file_list()
+            self._clear_image_state()
         self._persist_config()
 
     def on_file_selected(self, event):
