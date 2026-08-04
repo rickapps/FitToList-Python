@@ -246,17 +246,36 @@ class PhotoEditorApp(tk.Tk):
     # ---------- UI construction ----------
     def _build_menu(self):
         menubar = tk.Menu(self)
+
         file_menu = tk.Menu(menubar, tearoff=False)
         file_menu.add_command(label="Select Folders...", command=self.select_folders)
         file_menu.add_command(label="Save", command=self.save)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
+
+        actions_menu = tk.Menu(menubar, tearoff=False)
+        actions_menu.add_command(label="Crop to Selection", command=self.apply_crop)
+        actions_menu.add_command(label="Rotate Right", command=self.rotate_right)
+        actions_menu.add_command(label="Rotate Left", command=self.rotate_left)
+        actions_menu.add_command(label="Reverse Image", command=self.reverse_image)
+        actions_menu.add_separator()
+        actions_menu.add_command(
+            label="Process & Save", command=self.process_and_save, accelerator="Double-click in selection"
+        )
+        menubar.add_cascade(label="Actions", menu=actions_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=False)
+        help_menu.add_command(label="User Guide", command=self.show_user_guide)
+        help_menu.add_command(label="About FitToList", command=self.show_about)
+        menubar.add_cascade(label="Help", menu=help_menu)
+
         self.config(menu=menubar)
 
     def _build_layout(self):
         top_frame = tk.Frame(self)
         top_frame.pack(fill=tk.X, side=tk.TOP)
+        self._build_folder_bar(top_frame)
         self._build_controls(top_frame)
 
         paned = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, sashwidth=6)
@@ -271,23 +290,6 @@ class PhotoEditorApp(tk.Tk):
         self._build_right_pane(right_frame)
 
     def _build_left_pane(self, parent):
-        self.folder_label = tk.Label(
-            parent, text=self.source_folder, anchor="w", wraplength=230, justify="left"
-        )
-        self.folder_label.pack(fill=tk.X, padx=5, pady=(5, 0))
-
-        self.target_folder_label = tk.Label(
-            parent,
-            text=self.target_folder or "Target folder not set",
-            anchor="w",
-            wraplength=230,
-            justify="left",
-        )
-        self.target_folder_label.pack(fill=tk.X, padx=5, pady=(5, 0))
-
-        folders_btn = tk.Button(parent, text="Select Folders...", command=self.select_folders)
-        folders_btn.pack(fill=tk.X, padx=5, pady=5)
-
         list_container = tk.Frame(parent)
         list_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
 
@@ -299,6 +301,24 @@ class PhotoEditorApp(tk.Tk):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.file_listbox.bind("<<ListboxSelect>>", self.on_file_selected)
+
+    def _build_folder_bar(self, parent):
+        folder_bar = tk.Frame(parent)
+        folder_bar.pack(fill=tk.X, padx=5, pady=5)
+        folder_bar.grid_columnconfigure(1, weight=1)
+
+        tk.Label(folder_bar, text="Source:").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        self.folder_label = tk.Label(folder_bar, text=self.source_folder, anchor="w", justify="left")
+        self.folder_label.grid(row=0, column=1, sticky="ew")
+
+        tk.Label(folder_bar, text="Target:").grid(row=1, column=0, sticky="w", padx=(0, 5))
+        self.target_folder_label = tk.Label(
+            folder_bar, text=self.target_folder or "Target folder not set", anchor="w", justify="left"
+        )
+        self.target_folder_label.grid(row=1, column=1, sticky="ew")
+
+        folders_btn = tk.Button(folder_bar, text="Select Folders...", command=self.select_folders)
+        folders_btn.grid(row=0, column=2, rowspan=2, padx=(10, 0), sticky="ns")
 
     def _build_controls(self, parent):
         controls = tk.Frame(parent)
@@ -343,6 +363,7 @@ class PhotoEditorApp(tk.Tk):
         self.canvas.bind("<B1-Motion>", self._on_drag_move)
         self.canvas.bind("<ButtonRelease-1>", self._on_drag_end)
         self.canvas.bind("<Motion>", self._on_hover)
+        self.canvas.bind("<Double-Button-1>", self._on_canvas_double_click)
 
         self.status_var = tk.StringVar(value="No image loaded")
         status_bar = tk.Label(parent, textvariable=self.status_var, anchor="w", relief=tk.SUNKEN)
@@ -564,9 +585,17 @@ class PhotoEditorApp(tk.Tk):
         self._drag_mode = None
         self._on_hover(event)
 
+    def _on_canvas_double_click(self, event):
+        if self._hit_test(event.x, event.y) == "inside":
+            self.process_and_save()
+
     def apply_crop(self):
+        self._crop_to_selection()
+
+    def _crop_to_selection(self):
+        """Crop current_image to selection_box. Returns True if a crop was applied."""
         if self.current_image is None or self.selection_box is None:
-            return
+            return False
         x0, y0, x1, y1 = self.selection_box
         left, right = sorted((x0, x1))
         top, bottom = sorted((y0, y1))
@@ -581,13 +610,14 @@ class PhotoEditorApp(tk.Tk):
 
         if crop_right - crop_left < 2 or crop_bottom - crop_top < 2:
             messagebox.showwarning("Crop", "Selection is too small to crop.")
-            return
+            return False
 
         box = (int(crop_left), int(crop_top), int(crop_right), int(crop_bottom))
         self.current_image = self.current_image.crop(box)
         self.clear_selection()
         self._redraw()
         self.status_var.set(f"Cropped to {self.current_image.width} x {self.current_image.height}")
+        return True
 
     # ---------- Resize ----------
     def _on_scale_change(self, value):
@@ -607,6 +637,37 @@ class PhotoEditorApp(tk.Tk):
         self._redraw()
         self.status_var.set(f"Resized to {new_w} x {new_h}")
 
+    # ---------- Rotate / Flip ----------
+    def rotate_right(self):
+        if self.current_image is None:
+            return
+        self.current_image = self.current_image.transpose(Image.ROTATE_270)
+        self.scale_var.set(100)
+        self.scale_pct_label.config(text="100%")
+        self.clear_selection()
+        self._redraw()
+        self.status_var.set(f"Rotated right - {self.current_image.width} x {self.current_image.height}")
+
+    def rotate_left(self):
+        if self.current_image is None:
+            return
+        self.current_image = self.current_image.transpose(Image.ROTATE_90)
+        self.scale_var.set(100)
+        self.scale_pct_label.config(text="100%")
+        self.clear_selection()
+        self._redraw()
+        self.status_var.set(f"Rotated left - {self.current_image.width} x {self.current_image.height}")
+
+    def reverse_image(self):
+        if self.current_image is None:
+            return
+        self.current_image = self.current_image.transpose(Image.FLIP_LEFT_RIGHT)
+        self.scale_var.set(100)
+        self.scale_pct_label.config(text="100%")
+        self.clear_selection()
+        self._redraw()
+        self.status_var.set(f"Reversed - {self.current_image.width} x {self.current_image.height}")
+
     # ---------- Reset / Save ----------
     def reset_image(self):
         if self.original_image is None:
@@ -619,12 +680,16 @@ class PhotoEditorApp(tk.Tk):
         self.status_var.set(f"Reset - {self.current_image.width} x {self.current_image.height}")
 
     def save(self):
+        self._save_current(show_confirmation=True)
+
+    def _save_current(self, show_confirmation):
+        """Write current_image to the target folder. Returns True on success."""
         if self.current_image is None:
             messagebox.showinfo("Save", "No image loaded to save.")
-            return
+            return False
         if not self.target_folder:
             messagebox.showwarning("Save", "Please set a target folder first.")
-            return
+            return False
         filename = os.path.basename(self.image_path)
         path = os.path.join(self.target_folder, filename)
         try:
@@ -634,8 +699,60 @@ class PhotoEditorApp(tk.Tk):
             image_to_save.save(path)
         except Exception as exc:
             messagebox.showerror("Error", f"Could not save image:\n{exc}")
+            return False
+        if show_confirmation:
+            messagebox.showinfo("Save", f"Saved to {path}")
+        else:
+            self.status_var.set(f"Saved to {path}")
+        return True
+
+    # ---------- Process & Save ----------
+    def process_and_save(self):
+        if self.current_image is None:
             return
-        messagebox.showinfo("Save", f"Saved to {path}")
+        if self.selection_box is not None and not self._crop_to_selection():
+            return
+        if not self._save_current(show_confirmation=False):
+            return
+        self._select_next_file()
+
+    def _select_next_file(self):
+        size = self.file_listbox.size()
+        if size == 0:
+            return
+        names = self.file_listbox.get(0, tk.END)
+        current_name = os.path.basename(self.image_path) if self.image_path else None
+        try:
+            next_index = names.index(current_name) + 1
+        except ValueError:
+            next_index = 0
+        if next_index >= size:
+            return
+        self.file_listbox.selection_clear(0, tk.END)
+        self.file_listbox.selection_set(next_index)
+        self.file_listbox.activate(next_index)
+        self.file_listbox.see(next_index)
+        path = os.path.join(self.source_folder, names[next_index])
+        self._load_image(path)
+
+    # ---------- Help ----------
+    def show_user_guide(self):
+        messagebox.showinfo(
+            "User Guide",
+            "1. File > Select Folders... to choose a source and target folder.\n"
+            "2. Pick an image from the file list to load it.\n"
+            "3. Drag on the image to select a crop area, then Actions > Crop to Selection.\n"
+            "4. Use Actions > Rotate Left/Right or Reverse Image to change orientation.\n"
+            "5. Use the Resize slider and Apply Resize to scale the image.\n"
+            "6. File > Save (or Actions > Process & Save) to write the result to the target folder.\n"
+            "7. Reset restores the image to how it was loaded.",
+        )
+
+    def show_about(self):
+        messagebox.showinfo(
+            "About FitToList",
+            "FitToList\n\nA desktop tool for quickly cropping and resizing photos in a folder.",
+        )
 
 
 def main():
