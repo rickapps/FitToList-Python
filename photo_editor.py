@@ -366,9 +366,27 @@ class PhotoEditorApp(tk.Tk):
         self.canvas.bind("<Motion>", self._on_hover)
         self.canvas.bind("<Double-Button-1>", self._on_canvas_double_click)
 
-        self.status_var = tk.StringVar(value="No image loaded")
-        status_bar = tk.Label(parent, textvariable=self.status_var, anchor="w", relief=tk.SUNKEN)
+        status_bar = tk.Frame(parent)
         status_bar.pack(fill=tk.X, padx=5, pady=(0, 5))
+        status_bar.columnconfigure(0, weight=1)
+
+        self.status_message_var = tk.StringVar(value="Select a photo from the list to begin.")
+        self.status_filename_var = tk.StringVar(value="")
+        self.status_size_var = tk.StringVar(value="")
+        self.status_selection_var = tk.StringVar(value="")
+
+        tk.Label(
+            status_bar, textvariable=self.status_message_var, anchor="w", relief=tk.SUNKEN, padx=6, pady=2
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            status_bar, textvariable=self.status_filename_var, anchor="w", relief=tk.SUNKEN, width=20, padx=6, pady=2
+        ).grid(row=0, column=1, sticky="ew")
+        tk.Label(
+            status_bar, textvariable=self.status_size_var, anchor="w", relief=tk.SUNKEN, width=12, padx=6, pady=2
+        ).grid(row=0, column=2, sticky="ew")
+        tk.Label(
+            status_bar, textvariable=self.status_selection_var, anchor="w", relief=tk.SUNKEN, width=20, padx=6, pady=2
+        ).grid(row=0, column=3, sticky="ew")
 
     # ---------- Folder persistence ----------
     def _persist_config(self):
@@ -428,7 +446,7 @@ class PhotoEditorApp(tk.Tk):
         self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_var.set(f"{os.path.basename(path)} - {image.width} x {image.height}")
+        self.status_message_var.set("Drag on the image to select a crop area.")
 
     def _clear_image_state(self):
         self.image_path = None
@@ -436,7 +454,8 @@ class PhotoEditorApp(tk.Tk):
         self.current_image = None
         self.clear_selection()
         self.canvas.delete("all")
-        self.status_var.set("No image loaded")
+        self.status_message_var.set("Select a photo from the list to begin.")
+        self._update_status()
 
     def _redraw(self):
         self.canvas.delete("image")
@@ -465,6 +484,37 @@ class PhotoEditorApp(tk.Tk):
         if self.selection_box:
             x0, y0, x1, y1 = self.selection_box
             self.canvas.create_rectangle(x0, y0, x1, y1, outline="red", width=2, tags="selection")
+        self._update_status()
+
+    def _selection_image_size(self):
+        """Return (width, height) of selection_box in image pixels, or None if there's no selection."""
+        if self.selection_box is None or self.current_image is None:
+            return None
+        x0, y0, x1, y1 = self.selection_box
+        left, right = sorted((x0, x1))
+        top, bottom = sorted((y0, y1))
+        off_x, off_y = self.display_offset
+        scale = self.display_scale
+        img_w, img_h = self.current_image.size
+        crop_left = max(0, min(img_w, (left - off_x) / scale))
+        crop_right = max(0, min(img_w, (right - off_x) / scale))
+        crop_top = max(0, min(img_h, (top - off_y) / scale))
+        crop_bottom = max(0, min(img_h, (bottom - off_y) / scale))
+        return round(crop_right - crop_left), round(crop_bottom - crop_top)
+
+    def _update_status(self):
+        if self.current_image is None or self.image_path is None:
+            self.status_filename_var.set("")
+            self.status_size_var.set("")
+            self.status_selection_var.set("")
+            return
+        self.status_filename_var.set(os.path.basename(self.image_path))
+        self.status_size_var.set(f"{self.current_image.width} x {self.current_image.height}")
+        selection_size = self._selection_image_size()
+        if selection_size:
+            self.status_selection_var.set(f"Selection: {selection_size[0]} x {selection_size[1]}")
+        else:
+            self.status_selection_var.set("")
 
     def clear_selection(self):
         self.selection_box = None
@@ -617,7 +667,7 @@ class PhotoEditorApp(tk.Tk):
         self.current_image = self.current_image.crop(box)
         self.clear_selection()
         self._redraw()
-        self.status_var.set(f"Cropped to {self.current_image.width} x {self.current_image.height}")
+        self.status_message_var.set("Cropped.")
         return True
 
     # ---------- Resize ----------
@@ -636,7 +686,7 @@ class PhotoEditorApp(tk.Tk):
         self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_var.set(f"Resized to {new_w} x {new_h}")
+        self.status_message_var.set("Resized.")
 
     # ---------- Rotate / Flip ----------
     def rotate_right(self):
@@ -647,7 +697,7 @@ class PhotoEditorApp(tk.Tk):
         self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_var.set(f"Rotated right - {self.current_image.width} x {self.current_image.height}")
+        self.status_message_var.set("Rotated right.")
 
     def rotate_left(self):
         if self.current_image is None:
@@ -657,7 +707,7 @@ class PhotoEditorApp(tk.Tk):
         self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_var.set(f"Rotated left - {self.current_image.width} x {self.current_image.height}")
+        self.status_message_var.set("Rotated left.")
 
     def reverse_image(self):
         if self.current_image is None:
@@ -667,7 +717,7 @@ class PhotoEditorApp(tk.Tk):
         self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_var.set(f"Reversed - {self.current_image.width} x {self.current_image.height}")
+        self.status_message_var.set("Reversed.")
 
     # ---------- Reset / Save ----------
     def reset_image(self):
@@ -678,7 +728,7 @@ class PhotoEditorApp(tk.Tk):
         self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_var.set(f"Reset - {self.current_image.width} x {self.current_image.height}")
+        self.status_message_var.set("Reset to original.")
 
     def save(self):
         self._save_current(show_confirmation=True)
@@ -716,7 +766,7 @@ class PhotoEditorApp(tk.Tk):
         if show_confirmation:
             messagebox.showinfo("Save", f"Saved to {path}")
         else:
-            self.status_var.set(f"Saved to {path}")
+            self.status_message_var.set(f"Saved to {path}")
         return True
 
     # ---------- Process & Save ----------
