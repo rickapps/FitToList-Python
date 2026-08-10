@@ -1,6 +1,7 @@
 import ctypes
 import json
 import os
+import re
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -682,6 +683,16 @@ class PhotoEditorApp(tk.Tk):
     def save(self):
         self._save_current(show_confirmation=True)
 
+    def _next_suffix(self, root, ext):
+        """Return the next _NN suffix for root/ext in target_folder (max existing + 1, else 0)."""
+        pattern = re.compile(rf"^{re.escape(root)}_(\d+){re.escape(ext)}$", re.IGNORECASE)
+        max_suffix = -1
+        for name in os.listdir(self.target_folder):
+            match = pattern.match(name)
+            if match:
+                max_suffix = max(max_suffix, int(match.group(1)))
+        return max_suffix + 1
+
     def _save_current(self, show_confirmation):
         """Write current_image to the target folder. Returns True on success."""
         if self.current_image is None:
@@ -691,8 +702,10 @@ class PhotoEditorApp(tk.Tk):
             messagebox.showwarning("Save", "Please set a target folder first.")
             return False
         filename = os.path.basename(self.image_path)
-        path = os.path.join(self.target_folder, filename)
+        root, ext = os.path.splitext(filename)
         try:
+            suffix = self._next_suffix(root, ext)
+            path = os.path.join(self.target_folder, f"{root}_{suffix:02d}{ext}")
             image_to_save = self.current_image
             if os.path.splitext(path)[1].lower() in (".jpg", ".jpeg") and image_to_save.mode in ("RGBA", "P"):
                 image_to_save = image_to_save.convert("RGB")
