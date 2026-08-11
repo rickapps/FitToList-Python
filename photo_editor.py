@@ -218,6 +218,76 @@ class FolderSelectionDialog(tk.Toplevel):
         self.destroy()
 
 
+class MaxSizeDialog(tk.Toplevel):
+    """Modal dialog for setting the max width/height applied to images on save."""
+
+    def __init__(self, parent, enabled, max_width, max_height):
+        super().__init__(parent)
+        self.title("Max Save Size")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.result = None
+
+        self.enabled_var = tk.BooleanVar(value=enabled)
+        self.width_var = tk.StringVar(value=str(max_width) if max_width else "")
+        self.height_var = tk.StringVar(value=str(max_height) if max_height else "")
+
+        frame = tk.Frame(self)
+        frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        tk.Checkbutton(
+            frame,
+            text="Reduce images that exceed the maximum size when saving",
+            variable=self.enabled_var,
+            command=self._update_field_state,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        tk.Label(frame, text="Max width (px):").grid(row=1, column=0, sticky="w")
+        self.width_entry = tk.Entry(frame, textvariable=self.width_var, width=10)
+        self.width_entry.grid(row=1, column=1, sticky="w", padx=(6, 0))
+
+        tk.Label(frame, text="Max height (px):").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.height_entry = tk.Entry(frame, textvariable=self.height_var, width=10)
+        self.height_entry.grid(row=2, column=1, sticky="w", padx=(6, 0), pady=(4, 0))
+
+        self._update_field_state()
+
+        btn_frame = tk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=12, pady=(0, 12))
+        tk.Button(btn_frame, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(4, 0))
+        tk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side=tk.RIGHT)
+
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.grab_set()
+        self.focus_set()
+
+    def _update_field_state(self):
+        state = tk.NORMAL if self.enabled_var.get() else tk.DISABLED
+        self.width_entry.config(state=state)
+        self.height_entry.config(state=state)
+
+    def _save(self):
+        enabled = self.enabled_var.get()
+        width_str = self.width_var.get().strip()
+        height_str = self.height_var.get().strip()
+        if enabled:
+            if not width_str.isdigit() or not height_str.isdigit() or int(width_str) == 0 or int(height_str) == 0:
+                messagebox.showerror(
+                    "Max Save Size",
+                    "Please enter positive whole numbers for max width and max height.",
+                    parent=self,
+                )
+                return
+        width = int(width_str) if width_str.isdigit() else None
+        height = int(height_str) if height_str.isdigit() else None
+        self.result = (enabled, width, height)
+        self.destroy()
+
+    def _cancel(self):
+        self.result = None
+        self.destroy()
+
+
 class PhotoEditorApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -228,6 +298,9 @@ class PhotoEditorApp(tk.Tk):
         config = load_config()
         self.source_folder = config.get("source_folder") or os.getcwd()
         self.target_folder = config.get("target_folder")
+        self.max_size_enabled = bool(config.get("max_size_enabled", False))
+        self.max_width = config.get("max_width")
+        self.max_height = config.get("max_height")
         self.image_path = None
         self.original_image = None   # PIL.Image as loaded from disk
         self.current_image = None    # PIL.Image after edits
@@ -250,6 +323,7 @@ class PhotoEditorApp(tk.Tk):
 
         file_menu = tk.Menu(menubar, tearoff=False)
         file_menu.add_command(label="Select Folders...", command=self.select_folders)
+        file_menu.add_command(label="Max Save Size...", command=self.edit_max_size)
         file_menu.add_command(label="Save", command=self.save)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.destroy)
@@ -337,25 +411,6 @@ class PhotoEditorApp(tk.Tk):
             row=0, column=2, columnspan=2, padx=2, pady=2, sticky="ew"
         )
 
-        tk.Label(controls, text="Resize:").grid(row=1, column=0, padx=2, pady=2, sticky="w")
-        self.scale_var = tk.IntVar(value=100)
-        self.scale_slider = tk.Scale(
-            controls,
-            from_=10,
-            to=200,
-            orient=tk.HORIZONTAL,
-            variable=self.scale_var,
-            command=self._on_scale_change,
-            showvalue=False,
-        )
-        self.scale_slider.grid(row=1, column=1, columnspan=2, sticky="ew", padx=2)
-        self.scale_pct_label = tk.Label(controls, text="100%", width=5)
-        self.scale_pct_label.grid(row=1, column=3, sticky="w")
-
-        tk.Button(controls, text="Apply Resize", command=self.apply_resize).grid(
-            row=2, column=0, columnspan=4, padx=2, pady=2, sticky="ew"
-        )
-
     def _build_right_pane(self, parent):
         self.canvas = tk.Canvas(parent, background="#333333", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -370,27 +425,38 @@ class PhotoEditorApp(tk.Tk):
         status_bar.pack(fill=tk.X, padx=5, pady=(0, 5))
         status_bar.columnconfigure(0, weight=1)
 
-        self.status_message_var = tk.StringVar(value="Select a photo from the list to begin.")
-        self.status_filename_var = tk.StringVar(value="")
-        self.status_size_var = tk.StringVar(value="")
+        self.status_message_var = tk.StringVar(value="")
+        self.status_name_var = tk.StringVar(value="")
         self.status_selection_var = tk.StringVar(value="")
+        self.status_output_var = tk.StringVar(value="")
 
         tk.Label(
             status_bar, textvariable=self.status_message_var, anchor="w", relief=tk.SUNKEN, padx=6, pady=2
         ).grid(row=0, column=0, sticky="ew")
         tk.Label(
-            status_bar, textvariable=self.status_filename_var, anchor="w", relief=tk.SUNKEN, width=20, padx=6, pady=2
+            status_bar, textvariable=self.status_name_var, anchor="w", relief=tk.SUNKEN, width=44, padx=6, pady=2
         ).grid(row=0, column=1, sticky="ew")
         tk.Label(
-            status_bar, textvariable=self.status_size_var, anchor="w", relief=tk.SUNKEN, width=12, padx=6, pady=2
+            status_bar, textvariable=self.status_selection_var, anchor="w", relief=tk.SUNKEN, width=20, padx=6, pady=2
         ).grid(row=0, column=2, sticky="ew")
         tk.Label(
-            status_bar, textvariable=self.status_selection_var, anchor="w", relief=tk.SUNKEN, width=20, padx=6, pady=2
+            status_bar, textvariable=self.status_output_var, anchor="w", relief=tk.SUNKEN, width=18, padx=6, pady=2
         ).grid(row=0, column=3, sticky="ew")
 
-    # ---------- Folder persistence ----------
+        self._status_message_base = "Select a photo from the list to begin."
+        self._refresh_message()
+
+    # ---------- Settings persistence ----------
     def _persist_config(self):
-        save_config({"source_folder": self.source_folder, "target_folder": self.target_folder})
+        save_config(
+            {
+                "source_folder": self.source_folder,
+                "target_folder": self.target_folder,
+                "max_size_enabled": self.max_size_enabled,
+                "max_width": self.max_width,
+                "max_height": self.max_height,
+            }
+        )
 
     # ---------- File listing ----------
     def _populate_file_list(self):
@@ -423,6 +489,16 @@ class PhotoEditorApp(tk.Tk):
             self._clear_image_state()
         self._persist_config()
 
+    def edit_max_size(self):
+        dialog = MaxSizeDialog(self, self.max_size_enabled, self.max_width, self.max_height)
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        self.max_size_enabled, self.max_width, self.max_height = dialog.result
+        self._persist_config()
+        self._refresh_message()
+        self._update_status()
+
     def on_file_selected(self, event):
         selection = self.file_listbox.curselection()
         if not selection:
@@ -442,11 +518,9 @@ class PhotoEditorApp(tk.Tk):
         self.image_path = path
         self.original_image = image
         self.current_image = image.copy()
-        self.scale_var.set(100)
-        self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_message_var.set("Drag on the image to select a crop area.")
+        self._set_message("Drag on the image to select a crop area.")
 
     def _clear_image_state(self):
         self.image_path = None
@@ -454,7 +528,7 @@ class PhotoEditorApp(tk.Tk):
         self.current_image = None
         self.clear_selection()
         self.canvas.delete("all")
-        self.status_message_var.set("Select a photo from the list to begin.")
+        self._set_message("Select a photo from the list to begin.")
         self._update_status()
 
     def _redraw(self):
@@ -502,19 +576,47 @@ class PhotoEditorApp(tk.Tk):
         crop_bottom = max(0, min(img_h, (bottom - off_y) / scale))
         return round(crop_right - crop_left), round(crop_bottom - crop_top)
 
+    def _planned_save_size(self):
+        """Return (width, height) the image would be saved at: the pending selection's
+        crop size if one exists (Save now commits it), else current_image's size - with
+        the max-size cap applied if it's enabled and would actually shrink the result.
+        None if no image is loaded."""
+        if self.current_image is None:
+            return None
+        width, height = self._selection_image_size() or self.current_image.size
+        if self.max_size_enabled and self.max_width and self.max_height:
+            scale = min(self.max_width / width, self.max_height / height, 1.0)
+            if scale < 1.0:
+                width = max(1, round(width * scale))
+                height = max(1, round(height * scale))
+        return width, height
+
     def _update_status(self):
         if self.current_image is None or self.image_path is None:
-            self.status_filename_var.set("")
-            self.status_size_var.set("")
+            self.status_name_var.set("")
             self.status_selection_var.set("")
+            self.status_output_var.set("")
             return
-        self.status_filename_var.set(os.path.basename(self.image_path))
-        self.status_size_var.set(f"{self.current_image.width} x {self.current_image.height}")
+        self.status_name_var.set(
+            f"{os.path.basename(self.image_path)} ({self.current_image.width} x {self.current_image.height})"
+        )
         selection_size = self._selection_image_size()
         if selection_size:
             self.status_selection_var.set(f"Selection: {selection_size[0]} x {selection_size[1]}")
         else:
             self.status_selection_var.set("")
+        save_width, save_height = self._planned_save_size()
+        self.status_output_var.set(f"Save size: {save_width} x {save_height}")
+
+    def _refresh_message(self):
+        text = self._status_message_base
+        if self.max_size_enabled and self.max_width and self.max_height:
+            text = f"{text}  [Max save size: {self.max_width} x {self.max_height}]"
+        self.status_message_var.set(text)
+
+    def _set_message(self, text):
+        self._status_message_base = text
+        self._refresh_message()
 
     def clear_selection(self):
         self.selection_box = None
@@ -667,70 +769,46 @@ class PhotoEditorApp(tk.Tk):
         self.current_image = self.current_image.crop(box)
         self.clear_selection()
         self._redraw()
-        self.status_message_var.set("Cropped.")
+        self._set_message("Cropped.")
         return True
-
-    # ---------- Resize ----------
-    def _on_scale_change(self, value):
-        self.scale_pct_label.config(text=f"{int(float(value))}%")
-
-    def apply_resize(self):
-        if self.current_image is None:
-            return
-        pct = self.scale_var.get()
-        img_w, img_h = self.current_image.size
-        new_w = max(1, int(img_w * pct / 100))
-        new_h = max(1, int(img_h * pct / 100))
-        self.current_image = self.current_image.resize((new_w, new_h), Image.LANCZOS)
-        self.scale_var.set(100)
-        self.scale_pct_label.config(text="100%")
-        self.clear_selection()
-        self._redraw()
-        self.status_message_var.set("Resized.")
 
     # ---------- Rotate / Flip ----------
     def rotate_right(self):
         if self.current_image is None:
             return
         self.current_image = self.current_image.transpose(Image.ROTATE_270)
-        self.scale_var.set(100)
-        self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_message_var.set("Rotated right.")
+        self._set_message("Rotated right.")
 
     def rotate_left(self):
         if self.current_image is None:
             return
         self.current_image = self.current_image.transpose(Image.ROTATE_90)
-        self.scale_var.set(100)
-        self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_message_var.set("Rotated left.")
+        self._set_message("Rotated left.")
 
     def reverse_image(self):
         if self.current_image is None:
             return
         self.current_image = self.current_image.transpose(Image.FLIP_LEFT_RIGHT)
-        self.scale_var.set(100)
-        self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_message_var.set("Reversed.")
+        self._set_message("Reversed.")
 
     # ---------- Reset / Save ----------
     def reset_image(self):
         if self.original_image is None:
             return
         self.current_image = self.original_image.copy()
-        self.scale_var.set(100)
-        self.scale_pct_label.config(text="100%")
         self.clear_selection()
         self._redraw()
-        self.status_message_var.set("Reset to original.")
+        self._set_message("Reset to original.")
 
     def save(self):
+        if self.selection_box is not None and not self._crop_to_selection():
+            return
         self._save_current(show_confirmation=True)
 
     def _next_suffix(self, root, ext):
@@ -759,6 +837,9 @@ class PhotoEditorApp(tk.Tk):
             image_to_save = self.current_image
             if os.path.splitext(path)[1].lower() in (".jpg", ".jpeg") and image_to_save.mode in ("RGBA", "P"):
                 image_to_save = image_to_save.convert("RGB")
+            save_size = self._planned_save_size()
+            if save_size != image_to_save.size:
+                image_to_save = image_to_save.resize(save_size, Image.LANCZOS)
             image_to_save.save(path)
         except Exception as exc:
             messagebox.showerror("Error", f"Could not save image:\n{exc}")
@@ -766,7 +847,7 @@ class PhotoEditorApp(tk.Tk):
         if show_confirmation:
             messagebox.showinfo("Save", f"Saved to {path}")
         else:
-            self.status_message_var.set(f"Saved to {path}")
+            self._set_message(f"Saved to {path}")
         return True
 
     # ---------- Process & Save ----------
@@ -806,9 +887,12 @@ class PhotoEditorApp(tk.Tk):
             "2. Pick an image from the file list to load it.\n"
             "3. Drag on the image to select a crop area, then Actions > Crop to Selection.\n"
             "4. Use Actions > Rotate Left/Right or Reverse Image to change orientation.\n"
-            "5. Use the Resize slider and Apply Resize to scale the image.\n"
-            "6. File > Save (or Actions > Process & Save) to write the result to the target folder.\n"
-            "7. Reset restores the image to how it was loaded.",
+            "5. File > Save (or Actions > Process & Save) to write the result to the target folder.\n"
+            "6. Reset restores the image to how it was loaded.\n"
+            "7. File > Max Save Size... sets a maximum width/height applied to images when "
+            "they're saved, shrinking them (preserving aspect ratio) if they're larger. Images "
+            "are never enlarged. This does not change the image on screen, only the saved file. "
+            "When active, it's noted in the status bar.",
         )
 
     def show_about(self):

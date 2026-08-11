@@ -29,4 +29,5 @@ Everything lives in `photo_editor.py` as a single `PhotoEditorApp(tk.Tk)` class.
 
 - No new top-level dependencies beyond Pillow without good reason — keep this a minimal, single-file script.
 - Image mutations happen only on `self.current_image`, never on `self.original_image`.
-- Any function that replaces `current_image` should reset the resize slider (`scale_var`/`scale_pct_label` back to 100%), clear the selection, redraw, and update `self.status_var` with the new dimensions — follow the existing pattern in `apply_crop`/`apply_resize`/`reset_image`.
+- Any function that replaces `current_image` should clear the selection, redraw, and set a status message via `self._set_message(...)` — follow the existing pattern in `apply_crop`/`reset_image`/`rotate_right`.
+- There is no interactive resize control. The only resizing is the optional max-width/max-height cap (File > Max Save Size...), applied to a copy of `current_image` at save time in `_save_current` via `_planned_save_size()` — it only ever shrinks (never enlarges) and never mutates `current_image` itself.
