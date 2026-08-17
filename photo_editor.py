@@ -609,16 +609,20 @@ class PhotoEditorApp(tk.Tk):
         or the user chose to discard them), False if the caller should abort."""
         if not self._has_unsaved_changes():
             return True
-        response = messagebox.askyesnocancel(
-            "Unsaved Changes",
-            f"{os.path.basename(self.image_path)} has unsaved changes. Save before continuing?",
-        )
+        filename = os.path.basename(self.image_path)
+        is_processed = self._is_processed_image(self.image_path)
+        if is_processed:
+            prompt = f"You have unsaved changes. Overwrite {filename} with your changes before continuing?"
+        else:
+            prompt = f"{filename} has unsaved changes. Save before continuing?"
+        response = messagebox.askyesnocancel("Unsaved Changes", prompt)
         if response is None:
             return False
         if response:
             if self.selection_box is not None and not self._crop_to_selection():
                 return False
-            return self._save_current(show_confirmation=False)
+            # Already confirmed above (with overwrite-specific wording if applicable) - don't ask again.
+            return self._save_current(show_confirmation=False, confirm_overwrite=False)
         return True
 
     # ---------- Image loading / display ----------
@@ -677,7 +681,9 @@ class PhotoEditorApp(tk.Tk):
         self._update_status()
 
     def _selection_image_size(self):
-        """Return (width, height) of selection_box in image pixels, or None if there's no selection."""
+        """Return (width, height) of selection_box in image pixels, or None if
+        there's no selection or it's currently zero-sized (e.g. the instant a new
+        selection drag starts, before the pointer has moved)."""
         if self.selection_box is None or self.current_image is None:
             return None
         x0, y0, x1, y1 = self.selection_box
@@ -690,7 +696,10 @@ class PhotoEditorApp(tk.Tk):
         crop_right = max(0, min(img_w, (right - off_x) / scale))
         crop_top = max(0, min(img_h, (top - off_y) / scale))
         crop_bottom = max(0, min(img_h, (bottom - off_y) / scale))
-        return round(crop_right - crop_left), round(crop_bottom - crop_top)
+        width, height = round(crop_right - crop_left), round(crop_bottom - crop_top)
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
 
     def _planned_save_size(self):
         """Return (width, height) the image would be saved at: the pending selection's
@@ -944,8 +953,25 @@ class PhotoEditorApp(tk.Tk):
                 max_suffix = max(max_suffix, int(match.group(1)))
         return max_suffix + 1
 
-    def _save_current(self, show_confirmation):
-        """Write current_image to the target folder. Returns True on success."""
+    def _is_processed_image(self, path):
+        """True if path is a file already living in the processed folder (i.e. it
+        was opened by selecting a processed child node, not a source node)."""
+        return bool(self.target_folder) and os.path.dirname(os.path.abspath(path)) == os.path.abspath(
+            self.target_folder
+        )
+
+    def _save_current(self, show_confirmation, confirm_overwrite=True):
+        """Write current_image to disk. Returns True on success.
+
+        A source image is written as a new file in the processed folder using the
+        `{root}_NN{ext}` auto-suffix convention (_next_suffix). An image already
+        living in the processed folder (opened via a processed child node) is
+        instead overwritten in place - editing an already-processed photo replaces
+        it rather than spawning another copy - guarded by a confirmation prompt
+        when there are unsaved edits that would be overwritten. Pass
+        confirm_overwrite=False when the caller already obtained equivalent
+        consent (e.g. _confirm_discard_changes' own prompt) to avoid asking twice.
+        """
         if self.current_image is None:
             messagebox.showinfo("Save", "No image loaded to save.")
             return False
@@ -953,10 +979,21 @@ class PhotoEditorApp(tk.Tk):
             messagebox.showwarning("Save", "Please set a processed folder first.")
             return False
         filename = os.path.basename(self.image_path)
-        root, ext = os.path.splitext(filename)
-        try:
+        if self._is_processed_image(self.image_path):
+            if (
+                confirm_overwrite
+                and self.is_dirty
+                and not messagebox.askyesno(
+                    "Save", f"You have unsaved changes. Overwrite {filename} with your changes?"
+                )
+            ):
+                return False
+            path = self.image_path
+        else:
+            root, ext = os.path.splitext(filename)
             suffix = self._next_suffix(root, ext)
             path = os.path.join(self.target_folder, f"{root}_{suffix:02d}{ext}")
+        try:
             image_to_save = self.current_image
             if os.path.splitext(path)[1].lower() in (".jpg", ".jpeg") and image_to_save.mode in ("RGBA", "P"):
                 image_to_save = image_to_save.convert("RGB")
