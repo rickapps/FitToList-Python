@@ -163,7 +163,7 @@ class FolderSelectionDialog(tk.Toplevel):
         display_frame.grid_columnconfigure(1, weight=1)
 
         tk.Label(display_frame, text="Source:").grid(row=0, column=0, sticky="w")
-        tk.Label(display_frame, text="Target:").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        tk.Label(display_frame, text="Processed:").grid(row=1, column=0, sticky="w", pady=(4, 0))
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
@@ -171,7 +171,7 @@ class FolderSelectionDialog(tk.Toplevel):
         source_tab = tk.Frame(notebook)
         target_tab = tk.Frame(notebook)
         notebook.add(source_tab, text="Source")
-        notebook.add(target_tab, text="Target")
+        notebook.add(target_tab, text="Processed")
 
         self.source_tree = FolderTreeFrame(source_tab, initial_source)
         self.source_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
@@ -203,11 +203,11 @@ class FolderSelectionDialog(tk.Toplevel):
             messagebox.showerror("Select Folders", "Please select a valid source folder.", parent=self)
             return
         if not target or not os.path.isdir(target):
-            messagebox.showerror("Select Folders", "Please select a valid target folder.", parent=self)
+            messagebox.showerror("Select Folders", "Please select a valid processed folder.", parent=self)
             return
         if os.path.abspath(source) == os.path.abspath(target):
             messagebox.showerror(
-                "Select Folders", "Source folder cannot be the same as the target folder.", parent=self
+                "Select Folders", "Source folder cannot be the same as the processed folder.", parent=self
             )
             return
         self.result = (source, target)
@@ -387,9 +387,9 @@ class PhotoEditorApp(tk.Tk):
         self.folder_label = tk.Label(folder_bar, text=self.source_folder, anchor="w", justify="left")
         self.folder_label.grid(row=0, column=1, sticky="ew")
 
-        tk.Label(folder_bar, text="Target:").grid(row=1, column=0, sticky="w", padx=(0, 5))
+        tk.Label(folder_bar, text="Processed:").grid(row=1, column=0, sticky="w", padx=(0, 5))
         self.target_folder_label = tk.Label(
-            folder_bar, text=self.target_folder or "Target folder not set", anchor="w", justify="left"
+            folder_bar, text=self.target_folder or "Processed folder not set", anchor="w", justify="left"
         )
         self.target_folder_label.grid(row=1, column=1, sticky="ew")
 
@@ -879,7 +879,7 @@ class PhotoEditorApp(tk.Tk):
             messagebox.showinfo("Save", "No image loaded to save.")
             return False
         if not self.target_folder:
-            messagebox.showwarning("Save", "Please set a target folder first.")
+            messagebox.showwarning("Save", "Please set a processed folder first.")
             return False
         filename = os.path.basename(self.image_path)
         root, ext = os.path.splitext(filename)
@@ -937,11 +937,11 @@ class PhotoEditorApp(tk.Tk):
     def show_user_guide(self):
         messagebox.showinfo(
             "User Guide",
-            "1. File > Select Folders... to choose a source and target folder.\n"
+            "1. File > Select Folders... to choose a source and processed folder.\n"
             "2. Pick an image from the file list to load it.\n"
             "3. Drag on the image to select a crop area, then Actions > Crop to Selection.\n"
             "4. Use Actions > Rotate Left/Right or Reverse Image to change orientation.\n"
-            "5. File > Save (or Actions > Process & Save) to write the result to the target folder.\n"
+            "5. File > Save (or Actions > Process & Save) to write the result to the processed folder.\n"
             "6. Reset restores the image to how it was loaded.\n"
             "7. File > Max Save Size... sets a maximum width/height applied to images when "
             "they're saved, shrinking them (preserving aspect ratio) if they're larger. Images "
