@@ -316,7 +316,8 @@ class PhotoEditorApp(tk.Tk):
 
         self._build_menu()
         self._build_layout()
-        self._populate_file_list()
+        self._tree_paths = {}  # tree iid -> file path, for both source and processed nodes
+        self._populate_tree()
 
     # ---------- UI construction ----------
     def _build_menu(self):
@@ -370,13 +371,13 @@ class PhotoEditorApp(tk.Tk):
         list_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
 
         scrollbar = tk.Scrollbar(list_container, orient=tk.VERTICAL)
-        self.file_listbox = tk.Listbox(
-            list_container, yscrollcommand=scrollbar.set, exportselection=False
+        self.file_tree = ttk.Treeview(
+            list_container, show="tree", selectmode="browse", yscrollcommand=scrollbar.set
         )
-        scrollbar.config(command=self.file_listbox.yview)
+        scrollbar.config(command=self.file_tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.file_listbox.bind("<<ListboxSelect>>", self.on_file_selected)
+        self.file_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.file_tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
     def _build_folder_bar(self, parent):
         folder_bar = tk.Frame(parent)
@@ -460,19 +461,86 @@ class PhotoEditorApp(tk.Tk):
         )
 
     # ---------- File listing ----------
-    def _populate_file_list(self):
-        self.file_listbox.delete(0, tk.END)
+    def _list_processed_names(self):
+        if self.target_folder and os.path.isdir(self.target_folder):
+            try:
+                return os.listdir(self.target_folder)
+            except OSError:
+                return []
+        return []
+
+    @staticmethod
+    def _matching_processed_names(source_name, processed_names):
+        """Processed filenames matching source_name's `{root}_NN{ext}` naming
+        (the same pattern `_next_suffix` scans for), sorted by suffix."""
+        root, ext = os.path.splitext(source_name)
+        pattern = re.compile(rf"^{re.escape(root)}_(\d+){re.escape(ext)}$", re.IGNORECASE)
+        matches = []
+        for pname in processed_names:
+            match = pattern.match(pname)
+            if match:
+                matches.append((int(match.group(1)), pname))
+        return [pname for _, pname in sorted(matches)]
+
+    def _populate_tree(self):
+        """Rebuild the whole file tree: one top-level node per source image, with a
+        child node for each processed output already saved for it. Used on startup
+        and when the source/target folders change; a save only touches one node, so
+        it goes through _refresh_processed_children instead."""
+        self.file_tree.delete(*self.file_tree.get_children(""))
+        self._tree_paths = {}
         try:
-            names = sorted(
+            source_names = sorted(
                 f
                 for f in os.listdir(self.source_folder)
                 if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
             )
         except OSError as exc:
             messagebox.showerror("Error", f"Could not read folder:\n{exc}")
-            names = []
-        for name in names:
-            self.file_listbox.insert(tk.END, name)
+            source_names = []
+
+        processed_names = self._list_processed_names()
+
+        for index, name in enumerate(source_names):
+            source_iid = f"src{index}"
+            self.file_tree.insert("", tk.END, iid=source_iid, text=name, open=False)
+            self._tree_paths[source_iid] = os.path.join(self.source_folder, name)
+
+            for pname in self._matching_processed_names(name, processed_names):
+                child_iid = f"{source_iid}/{pname}"
+                self.file_tree.insert(source_iid, tk.END, iid=child_iid, text=pname)
+                self._tree_paths[child_iid] = os.path.join(self.target_folder, pname)
+
+        self._select_tree_node_for_current_image()
+
+    def _source_iid_for_path(self, path):
+        for iid in self.file_tree.get_children(""):
+            if self._tree_paths.get(iid) == path:
+                return iid
+        return None
+
+    def _refresh_processed_children(self, source_path):
+        """Rescan the target folder for processed outputs of a single source image
+        and rebuild just that node's children, leaving the rest of the tree (and
+        its selection) untouched. Does nothing if source_path isn't a top-level
+        (source) node - e.g. it's a processed file itself, which the newly saved
+        output won't be matched against anyway (see CLAUDE.md)."""
+        source_iid = self._source_iid_for_path(source_path)
+        if source_iid is None:
+            return
+        for child_iid in self.file_tree.get_children(source_iid):
+            del self._tree_paths[child_iid]
+        self.file_tree.delete(*self.file_tree.get_children(source_iid))
+
+        name = os.path.basename(source_path)
+        processed_names = self._list_processed_names()
+        matches = self._matching_processed_names(name, processed_names)
+        for pname in matches:
+            child_iid = f"{source_iid}/{pname}"
+            self.file_tree.insert(source_iid, tk.END, iid=child_iid, text=pname)
+            self._tree_paths[child_iid] = os.path.join(self.target_folder, pname)
+        if matches:
+            self.file_tree.item(source_iid, open=True)
 
     def select_folders(self):
         dialog = FolderSelectionDialog(self, self.source_folder, self.target_folder)
@@ -481,6 +549,7 @@ class PhotoEditorApp(tk.Tk):
             return
         new_source, new_target = dialog.result
         source_changed = os.path.abspath(new_source) != os.path.abspath(self.source_folder)
+        target_changed = not self.target_folder or os.path.abspath(new_target) != os.path.abspath(self.target_folder)
         if source_changed and not self._confirm_discard_changes():
             return
         self.source_folder = new_source
@@ -488,8 +557,9 @@ class PhotoEditorApp(tk.Tk):
         self.folder_label.config(text=self.source_folder)
         self.target_folder_label.config(text=self.target_folder)
         if source_changed:
-            self._populate_file_list()
             self._clear_image_state()
+        if source_changed or target_changed:
+            self._populate_tree()
         self._persist_config()
 
     def edit_max_size(self):
@@ -502,32 +572,33 @@ class PhotoEditorApp(tk.Tk):
         self._refresh_message()
         self._update_status()
 
-    def on_file_selected(self, event):
-        selection = self.file_listbox.curselection()
+    def on_tree_select(self, event):
+        selection = self.file_tree.selection()
         if not selection:
             return
-        filename = self.file_listbox.get(selection[0])
-        path = os.path.join(self.source_folder, filename)
-        if path == self.image_path:
+        path = self._tree_paths.get(selection[0])
+        if path is None or path == self.image_path:
             return
         if not self._confirm_discard_changes():
-            self._restore_listbox_selection()
+            self._select_tree_node_for_current_image()
             return
         self._load_image(path)
 
-    def _restore_listbox_selection(self):
-        """Re-select the currently loaded image in the file list, undoing a selection
-        click that was cancelled because of unsaved changes."""
-        self.file_listbox.selection_clear(0, tk.END)
+    def _select_tree_node_for_current_image(self):
+        """Select whichever tree node corresponds to the currently loaded image, if
+        any - used to restore the tree after a cancelled switch and to re-highlight
+        the loaded image after a tree rebuild. on_tree_select no-ops when the
+        resulting selection's path matches self.image_path, so this never re-triggers
+        a load."""
+        self.file_tree.selection_remove(self.file_tree.selection())
         if not self.image_path:
             return
-        current_name = os.path.basename(self.image_path)
-        names = self.file_listbox.get(0, tk.END)
-        if current_name in names:
-            index = names.index(current_name)
-            self.file_listbox.selection_set(index)
-            self.file_listbox.activate(index)
-            self.file_listbox.see(index)
+        for iid, path in self._tree_paths.items():
+            if path == self.image_path:
+                self.file_tree.selection_set(iid)
+                self.file_tree.focus(iid)
+                self.file_tree.see(iid)
+                return
 
     def _has_unsaved_changes(self):
         return self.current_image is not None and (self.is_dirty or self.selection_box is not None)
@@ -897,6 +968,7 @@ class PhotoEditorApp(tk.Tk):
             messagebox.showerror("Error", f"Could not save image:\n{exc}")
             return False
         self.is_dirty = False
+        self._refresh_processed_children(self.image_path)
         self._update_status()
         if show_confirmation:
             messagebox.showinfo("Save", f"Saved to {path}")
@@ -915,23 +987,23 @@ class PhotoEditorApp(tk.Tk):
         self._select_next_file()
 
     def _select_next_file(self):
-        size = self.file_listbox.size()
-        if size == 0:
+        """Advance to the next source image after Process & Save. Selecting the node
+        triggers on_tree_select, which does the actual load."""
+        source_iids = self.file_tree.get_children("")
+        if not source_iids:
             return
-        names = self.file_listbox.get(0, tk.END)
+        names = [self.file_tree.item(iid, "text") for iid in source_iids]
         current_name = os.path.basename(self.image_path) if self.image_path else None
         try:
             next_index = names.index(current_name) + 1
         except ValueError:
             next_index = 0
-        if next_index >= size:
+        if next_index >= len(source_iids):
             return
-        self.file_listbox.selection_clear(0, tk.END)
-        self.file_listbox.selection_set(next_index)
-        self.file_listbox.activate(next_index)
-        self.file_listbox.see(next_index)
-        path = os.path.join(self.source_folder, names[next_index])
-        self._load_image(path)
+        next_iid = source_iids[next_index]
+        self.file_tree.selection_set(next_iid)
+        self.file_tree.focus(next_iid)
+        self.file_tree.see(next_iid)
 
     # ---------- Help ----------
     def show_user_guide(self):
