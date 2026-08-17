@@ -304,6 +304,7 @@ class PhotoEditorApp(tk.Tk):
         self.image_path = None
         self.original_image = None   # PIL.Image as loaded from disk
         self.current_image = None    # PIL.Image after edits
+        self.is_dirty = False        # True if current_image has unsaved edits
         self.display_photo = None    # ImageTk.PhotoImage, kept alive for the canvas
         self.display_scale = 1.0
         self.display_offset = (0, 0)
@@ -480,6 +481,8 @@ class PhotoEditorApp(tk.Tk):
             return
         new_source, new_target = dialog.result
         source_changed = os.path.abspath(new_source) != os.path.abspath(self.source_folder)
+        if source_changed and not self._confirm_discard_changes():
+            return
         self.source_folder = new_source
         self.target_folder = new_target
         self.folder_label.config(text=self.source_folder)
@@ -505,7 +508,47 @@ class PhotoEditorApp(tk.Tk):
             return
         filename = self.file_listbox.get(selection[0])
         path = os.path.join(self.source_folder, filename)
+        if path == self.image_path:
+            return
+        if not self._confirm_discard_changes():
+            self._restore_listbox_selection()
+            return
         self._load_image(path)
+
+    def _restore_listbox_selection(self):
+        """Re-select the currently loaded image in the file list, undoing a selection
+        click that was cancelled because of unsaved changes."""
+        self.file_listbox.selection_clear(0, tk.END)
+        if not self.image_path:
+            return
+        current_name = os.path.basename(self.image_path)
+        names = self.file_listbox.get(0, tk.END)
+        if current_name in names:
+            index = names.index(current_name)
+            self.file_listbox.selection_set(index)
+            self.file_listbox.activate(index)
+            self.file_listbox.see(index)
+
+    def _has_unsaved_changes(self):
+        return self.current_image is not None and (self.is_dirty or self.selection_box is not None)
+
+    def _confirm_discard_changes(self):
+        """If the loaded image has unsaved edits, ask the user how to proceed.
+        Returns True if it's fine to continue (nothing to save, changes were saved,
+        or the user chose to discard them), False if the caller should abort."""
+        if not self._has_unsaved_changes():
+            return True
+        response = messagebox.askyesnocancel(
+            "Unsaved Changes",
+            f"{os.path.basename(self.image_path)} has unsaved changes. Save before continuing?",
+        )
+        if response is None:
+            return False
+        if response:
+            if self.selection_box is not None and not self._crop_to_selection():
+                return False
+            return self._save_current(show_confirmation=False)
+        return True
 
     # ---------- Image loading / display ----------
     def _load_image(self, path):
@@ -518,6 +561,7 @@ class PhotoEditorApp(tk.Tk):
         self.image_path = path
         self.original_image = image
         self.current_image = image.copy()
+        self.is_dirty = False
         self.clear_selection()
         self._redraw()
         self._set_message("Drag on the image to select a crop area.")
@@ -526,6 +570,7 @@ class PhotoEditorApp(tk.Tk):
         self.image_path = None
         self.original_image = None
         self.current_image = None
+        self.is_dirty = False
         self.clear_selection()
         self.canvas.delete("all")
         self._set_message("Select a photo from the list to begin.")
@@ -597,8 +642,10 @@ class PhotoEditorApp(tk.Tk):
             self.status_selection_var.set("")
             self.status_output_var.set("")
             return
+        dirty_marker = " *" if self._has_unsaved_changes() else ""
         self.status_name_var.set(
             f"{os.path.basename(self.image_path)} ({self.current_image.width} x {self.current_image.height})"
+            f"{dirty_marker}"
         )
         selection_size = self._selection_image_size()
         if selection_size:
@@ -767,6 +814,7 @@ class PhotoEditorApp(tk.Tk):
 
         box = (int(crop_left), int(crop_top), int(crop_right), int(crop_bottom))
         self.current_image = self.current_image.crop(box)
+        self.is_dirty = True
         self.clear_selection()
         self._redraw()
         self._set_message("Cropped.")
@@ -777,6 +825,7 @@ class PhotoEditorApp(tk.Tk):
         if self.current_image is None:
             return
         self.current_image = self.current_image.transpose(Image.ROTATE_270)
+        self.is_dirty = True
         self.clear_selection()
         self._redraw()
         self._set_message("Rotated right.")
@@ -785,6 +834,7 @@ class PhotoEditorApp(tk.Tk):
         if self.current_image is None:
             return
         self.current_image = self.current_image.transpose(Image.ROTATE_90)
+        self.is_dirty = True
         self.clear_selection()
         self._redraw()
         self._set_message("Rotated left.")
@@ -793,6 +843,7 @@ class PhotoEditorApp(tk.Tk):
         if self.current_image is None:
             return
         self.current_image = self.current_image.transpose(Image.FLIP_LEFT_RIGHT)
+        self.is_dirty = True
         self.clear_selection()
         self._redraw()
         self._set_message("Reversed.")
@@ -802,6 +853,7 @@ class PhotoEditorApp(tk.Tk):
         if self.original_image is None:
             return
         self.current_image = self.original_image.copy()
+        self.is_dirty = False
         self.clear_selection()
         self._redraw()
         self._set_message("Reset to original.")
@@ -844,6 +896,8 @@ class PhotoEditorApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Error", f"Could not save image:\n{exc}")
             return False
+        self.is_dirty = False
+        self._update_status()
         if show_confirmation:
             messagebox.showinfo("Save", f"Saved to {path}")
         else:
