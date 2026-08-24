@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, ttk
@@ -88,12 +89,25 @@ def _draw_save_icon(draw, size, fg):
     draw.rectangle([pad + 5, size - pad - 9, size - pad - 5, size - pad - 1], outline=fg, width=2)
 
 
+def _draw_open_folder_icon(draw, size, fg):
+    _draw_folder_icon(draw, size, fg)
+    # arrow breaking out of the folder toward the upper right, signaling "open externally"
+    tail = (size * 0.42, size * 0.68)
+    tip = (size * 0.86, size * 0.24)
+    draw.line([tail, tip], fill=fg, width=3)
+    dir_angle = math.degrees(math.atan2(tip[1] - tail[1], tip[0] - tail[0]))
+    back_left = _point_on_circle(tip[0], tip[1], size * 0.2, dir_angle + 150)
+    back_right = _point_on_circle(tip[0], tip[1], size * 0.2, dir_angle - 150)
+    draw.polygon([tip, back_left, back_right], fill=fg)
+
+
 def build_toolbar_icons(size=TOOLBAR_ICON_SIZE, fg="#333333"):
     """Render the toolbar button icons as ImageTk.PhotoImage objects. Must be
     called after a Tk root window exists. Callers must keep the returned dict
     referenced for the app's lifetime or Tkinter will garbage-collect the images."""
     specs = {
         "select_folders": lambda d: _draw_folder_icon(d, size, fg),
+        "open_processed_folder": lambda d: _draw_open_folder_icon(d, size, fg),
         "rotate_right": lambda d: _draw_rotate_icon(d, size, fg, clockwise=True),
         "rotate_left": lambda d: _draw_rotate_icon(d, size, fg, clockwise=False),
         "crop": lambda d: _draw_crop_icon(d, size, fg),
@@ -444,6 +458,8 @@ class PhotoEditorApp(tk.Tk):
 
         file_menu = tk.Menu(menubar, tearoff=False)
         file_menu.add_command(label="Select Folders...", command=self.select_folders)
+        file_menu.add_command(label="Open Source Folder", command=self.open_source_folder)
+        file_menu.add_command(label="Open Processed Folder", command=self.open_processed_folder)
         file_menu.add_command(label="Max Save Size...", command=self.edit_max_size)
         file_menu.add_command(label="Save", command=self.save)
         file_menu.add_separator()
@@ -540,6 +556,7 @@ class PhotoEditorApp(tk.Tk):
 
         toolbar_buttons = [
             ("select_folders", self.select_folders, "Select Folders"),
+            ("open_processed_folder", self.open_processed_folder, "Open Processed Folder"),
             ("rotate_right", self.rotate_right, "Rotate Right"),
             ("rotate_left", self.rotate_left, "Rotate Left"),
             ("crop", self.apply_crop, "Crop to Selection"),
@@ -572,7 +589,6 @@ class PhotoEditorApp(tk.Tk):
 
         self.status_message_var = tk.StringVar(value="")
         self.status_name_var = tk.StringVar(value="")
-        self.status_selection_var = tk.StringVar(value="")
         self.status_output_var = tk.StringVar(value="")
 
         tk.Label(
@@ -582,11 +598,8 @@ class PhotoEditorApp(tk.Tk):
             status_bar, textvariable=self.status_name_var, anchor="w", relief=tk.SUNKEN, width=44, padx=6, pady=2
         ).grid(row=0, column=1, sticky="ew")
         tk.Label(
-            status_bar, textvariable=self.status_selection_var, anchor="w", relief=tk.SUNKEN, width=20, padx=6, pady=2
-        ).grid(row=0, column=2, sticky="ew")
-        tk.Label(
             status_bar, textvariable=self.status_output_var, anchor="w", relief=tk.SUNKEN, width=18, padx=6, pady=2
-        ).grid(row=0, column=3, sticky="ew")
+        ).grid(row=0, column=2, sticky="ew")
 
         self._status_message_base = "Select a photo from the list to begin."
         self._refresh_message()
@@ -655,6 +668,8 @@ class PhotoEditorApp(tk.Tk):
                 self._tree_paths[child_iid] = os.path.join(self.target_folder, pname)
 
         self._select_tree_node_for_current_image()
+        if not self.image_path:
+            self._select_first_unprocessed_image()
 
     def _source_iid_for_path(self, path):
         for iid in self.file_tree.get_children(""):
@@ -705,6 +720,27 @@ class PhotoEditorApp(tk.Tk):
             self._populate_tree()
         self._persist_config()
 
+    def _open_folder_in_file_manager(self, path, title):
+        if not os.path.isdir(path):
+            messagebox.showerror(title, f"Folder not found:\n{path}")
+            return
+        try:
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.run(["xdg-open", path], check=False)
+        except OSError as exc:
+            messagebox.showerror(title, f"Could not open folder:\n{exc}")
+
+    def open_source_folder(self):
+        self._open_folder_in_file_manager(self.source_folder, "Open Source Folder")
+
+    def open_processed_folder(self):
+        if not self.target_folder:
+            messagebox.showwarning("Open Processed Folder", "Please set a processed folder first.")
+            return
+        self._open_folder_in_file_manager(self.target_folder, "Open Processed Folder")
+
     def edit_max_size(self):
         dialog = MaxSizeDialog(self, self.max_size_enabled, self.max_width, self.max_height)
         self.wait_window(dialog)
@@ -742,6 +778,22 @@ class PhotoEditorApp(tk.Tk):
                 self.file_tree.focus(iid)
                 self.file_tree.see(iid)
                 return
+
+    def _select_first_unprocessed_image(self):
+        """Select and load the first source image with no processed children yet -
+        the image the user is most likely to want to work on next. Falls back to
+        the first source image overall if every one already has processed output.
+        Called after a tree rebuild when there's no currently loaded image to
+        restore."""
+        source_iids = self.file_tree.get_children("")
+        target_iid = next((iid for iid in source_iids if not self.file_tree.get_children(iid)), None)
+        if target_iid is None and source_iids:
+            target_iid = source_iids[0]
+        if target_iid is not None:
+            self.file_tree.selection_set(target_iid)
+            self.file_tree.focus(target_iid)
+            self.file_tree.see(target_iid)
+            self._load_image(self._tree_paths[target_iid])
 
     def _has_unsaved_changes(self):
         return self.current_image is not None and (self.is_dirty or self.selection_box is not None)
@@ -862,24 +914,28 @@ class PhotoEditorApp(tk.Tk):
     def _update_status(self):
         if self.current_image is None or self.image_path is None:
             self.status_name_var.set("")
-            self.status_selection_var.set("")
             self.status_output_var.set("")
-            return
-        dirty_marker = " *" if self._has_unsaved_changes() else ""
-        self.status_name_var.set(
-            f"{os.path.basename(self.image_path)} ({self.current_image.width} x {self.current_image.height})"
-            f"{dirty_marker}"
-        )
-        selection_size = self._selection_image_size()
-        if selection_size:
-            self.status_selection_var.set(f"Selection: {selection_size[0]} x {selection_size[1]}")
         else:
-            self.status_selection_var.set("")
-        save_width, save_height = self._planned_save_size()
-        self.status_output_var.set(f"Save size: {save_width} x {save_height}")
+            dirty_marker = " *" if self._has_unsaved_changes() else ""
+            self.status_name_var.set(
+                f"{os.path.basename(self.image_path)} ({self.current_image.width} x {self.current_image.height})"
+                f"{dirty_marker}"
+            )
+            save_width, save_height = self._planned_save_size()
+            self.status_output_var.set(f"Save size: {save_width} x {save_height}")
+        self._refresh_message()
 
     def _refresh_message(self):
-        self.status_message_var.set(self._status_message_base)
+        """Set the message panel: while there's an active selection, show its live
+        size (formerly its own status bar panel) and the crop hint in place of the
+        base message, updating as the user drags to move or resize it; otherwise
+        fall back to the current base message."""
+        selection_size = self._selection_image_size()
+        if selection_size:
+            text = f"Selection: {selection_size[0]} x {selection_size[1]}   |   Double click to crop and save."
+        else:
+            text = self._status_message_base
+        self.status_message_var.set(text)
 
     def _refresh_max_size_status(self):
         if self.max_size_enabled and self.max_width and self.max_height:
@@ -1194,14 +1250,20 @@ class PhotoEditorApp(tk.Tk):
             "User Guide",
             "1. File > Select Folders... to choose a source and processed folder.\n"
             "2. Pick an image from the file list to load it.\n"
-            "3. Drag on the image to select a crop area, then Actions > Crop to Selection.\n"
+            "3. Drag on the image to select a crop area, then Actions > Crop to Selection. Drag an "
+            "edge or corner of an existing selection to resize it, or drag inside it to move it; "
+            "while a selection is active, the status bar shows its size in place of the usual "
+            "message.\n"
             "4. Use Actions > Rotate Left/Right or Reverse Image to change orientation.\n"
             "5. File > Save (or Actions > Process & Save) to write the result to the processed folder.\n"
             "6. Reset restores the image to how it was loaded.\n"
             "7. File > Max Save Size... sets a maximum width/height applied to images when "
             "they're saved, shrinking them (preserving aspect ratio) if they're larger. Images "
             "are never enlarged. This does not change the image on screen, only the saved file. "
-            "When active, it's noted in the status bar.",
+            "When active, it's noted in the status bar.\n"
+            "8. Most of these actions - Select Folders, Open Processed Folder, Rotate, Crop to "
+            "Selection, and Save - are also available as icon buttons in the toolbar, as a shortcut "
+            "to the File/Actions menus.",
         )
 
     def show_about(self):
