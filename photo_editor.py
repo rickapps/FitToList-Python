@@ -1,15 +1,23 @@
 import ctypes
 import json
+import math
 import os
 import re
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
 SELECTION_BORDER_MARGIN = 6  # canvas px within which a border-hover/resize is detected
 SELECTION_MIN_SIZE = 4       # minimum selection width/height in canvas px while resizing
+
+TOOLBAR_ICON_SIZE = 28   # px, source size for generated toolbar icons
+TOOLBAR_BUTTON_SIZE = 36  # px, fixed width/height applied to every toolbar button
+
+LINK_COLOR = "#1a56db"
+LINK_HOVER_COLOR = "#0f3fa8"
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".fittolist")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
@@ -30,6 +38,115 @@ def save_config(config):
             json.dump(config, f)
     except OSError:
         pass
+
+
+def _point_on_circle(cx, cy, r, angle_deg):
+    rad = math.radians(angle_deg)
+    return (cx + r * math.cos(rad), cy + r * math.sin(rad))
+
+
+def _draw_folder_icon(draw, size, fg):
+    pad = size * 0.11
+    tab_w = size * 0.4
+    tab_h = size * 0.11
+    body_top = pad + tab_h + size * 0.04
+    draw.rectangle([pad, pad, pad + tab_w, body_top], outline=fg, width=2)
+    draw.rectangle([pad, body_top, size - pad, size - pad], outline=fg, width=2)
+
+
+def _draw_rotate_icon(draw, size, fg, clockwise):
+    cx = cy = size / 2
+    r = size * 0.32
+    if clockwise:
+        start, end = 40, 300
+        tip_angle, dir_angle = end, end + 90
+    else:
+        start, end = 240, 500
+        tip_angle, dir_angle = start, start + 90
+    draw.arc([cx - r, cy - r, cx + r, cy + r], start=start, end=end, fill=fg, width=3)
+    tip = _point_on_circle(cx, cy, r, tip_angle)
+    back_left = _point_on_circle(tip[0], tip[1], size * 0.21, dir_angle + 150)
+    back_right = _point_on_circle(tip[0], tip[1], size * 0.21, dir_angle - 150)
+    draw.polygon([tip, back_left, back_right], fill=fg)
+
+
+def _draw_crop_icon(draw, size, fg):
+    pad = size * 0.14
+    arm = size * 0.35
+    draw.line([(pad, pad + arm), (pad, pad), (pad + arm, pad)], fill=fg, width=3)
+    draw.line(
+        [(size - pad, size - pad - arm), (size - pad, size - pad), (size - pad - arm, size - pad)],
+        fill=fg,
+        width=3,
+    )
+
+
+def _draw_save_icon(draw, size, fg):
+    pad = size * 0.11
+    draw.rectangle([pad, pad, size - pad, size - pad], outline=fg, width=2)
+    draw.rectangle([pad + 4, pad, size - pad - 4, pad + 6], fill=fg)
+    draw.rectangle([pad + 5, size - pad - 9, size - pad - 5, size - pad - 1], outline=fg, width=2)
+
+
+def build_toolbar_icons(size=TOOLBAR_ICON_SIZE, fg="#333333"):
+    """Render the toolbar button icons as ImageTk.PhotoImage objects. Must be
+    called after a Tk root window exists. Callers must keep the returned dict
+    referenced for the app's lifetime or Tkinter will garbage-collect the images."""
+    specs = {
+        "select_folders": lambda d: _draw_folder_icon(d, size, fg),
+        "rotate_right": lambda d: _draw_rotate_icon(d, size, fg, clockwise=True),
+        "rotate_left": lambda d: _draw_rotate_icon(d, size, fg, clockwise=False),
+        "crop": lambda d: _draw_crop_icon(d, size, fg),
+        "save": lambda d: _draw_save_icon(d, size, fg),
+    }
+    icons = {}
+    for name, draw_fn in specs.items():
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        draw_fn(ImageDraw.Draw(img))
+        icons[name] = ImageTk.PhotoImage(img)
+    return icons
+
+
+class ToolTip:
+    """Minimal hover tooltip: shows `text` in a borderless popup near the widget
+    after a short delay, following the standard Tkinter recipe (no extra dependency)."""
+
+    def __init__(self, widget, text, delay=500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._after_id = None
+        self._tip_window = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._hide)
+        widget.bind("<ButtonPress>", self._hide)
+
+    def _schedule(self, event=None):
+        self._cancel_pending()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _cancel_pending(self):
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if self._tip_window is not None:
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self._tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw, text=self.text, background="#ffffe0", relief=tk.SOLID, borderwidth=1, padx=6, pady=2
+        ).pack()
+
+    def _hide(self, event=None):
+        self._cancel_pending()
+        if self._tip_window is not None:
+            self._tip_window.destroy()
+            self._tip_window = None
 
 
 class FolderTreeFrame(tk.Frame):
@@ -314,6 +431,8 @@ class PhotoEditorApp(tk.Tk):
         self._drag_offset = (0, 0)   # click point relative to selection's top-left, for "move"
         self._selection_size = (0, 0)  # (width, height) preserved while moving
 
+        self.icons = build_toolbar_icons()  # kept referenced here so Tkinter doesn't GC them
+
         self._build_menu()
         self._build_layout()
         self._tree_paths = {}  # tree iid -> file path, for both source and processed nodes
@@ -336,6 +455,7 @@ class PhotoEditorApp(tk.Tk):
         actions_menu.add_command(label="Rotate Right", command=self.rotate_right)
         actions_menu.add_command(label="Rotate Left", command=self.rotate_left)
         actions_menu.add_command(label="Reverse Image", command=self.reverse_image)
+        actions_menu.add_command(label="Reset", command=self.reset_image)
         actions_menu.add_separator()
         actions_menu.add_command(
             label="Process & Save", command=self.process_and_save, accelerator="Double-click in selection"
@@ -353,7 +473,6 @@ class PhotoEditorApp(tk.Tk):
         top_frame = tk.Frame(self)
         top_frame.pack(fill=tk.X, side=tk.TOP)
         self._build_folder_bar(top_frame)
-        self._build_controls(top_frame)
 
         paned = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashrelief=tk.RAISED, sashwidth=6)
         paned.pack(fill=tk.BOTH, expand=True)
@@ -382,36 +501,60 @@ class PhotoEditorApp(tk.Tk):
     def _build_folder_bar(self, parent):
         folder_bar = tk.Frame(parent)
         folder_bar.pack(fill=tk.X, padx=5, pady=5)
-        folder_bar.grid_columnconfigure(1, weight=1)
 
-        tk.Label(folder_bar, text="Source:").grid(row=0, column=0, sticky="w", padx=(0, 5))
-        self.folder_label = tk.Label(folder_bar, text=self.source_folder, anchor="w", justify="left")
-        self.folder_label.grid(row=0, column=1, sticky="ew")
+        fields_group = tk.LabelFrame(folder_bar)
+        fields_group.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        fields_group.grid_columnconfigure(1, weight=1)
 
-        tk.Label(folder_bar, text="Processed:").grid(row=1, column=0, sticky="w", padx=(0, 5))
+        tk.Label(fields_group, text="Source:").grid(row=0, column=0, sticky="w", padx=(4, 5), pady=(4, 0))
+        self.folder_label = tk.Label(fields_group, text=self.source_folder, anchor="w", justify="left")
+        self.folder_label.grid(row=0, column=1, sticky="ew", padx=(0, 4), pady=(4, 0))
+
+        tk.Label(fields_group, text="Processed:").grid(row=1, column=0, sticky="w", padx=(4, 5))
         self.target_folder_label = tk.Label(
-            folder_bar, text=self.target_folder or "Processed folder not set", anchor="w", justify="left"
+            fields_group, text=self.target_folder or "Processed folder not set", anchor="w", justify="left"
         )
-        self.target_folder_label.grid(row=1, column=1, sticky="ew")
+        self.target_folder_label.grid(row=1, column=1, sticky="ew", padx=(0, 4))
 
-        folders_btn = tk.Button(folder_bar, text="Select Folders...", command=self.select_folders)
-        folders_btn.grid(row=0, column=2, rowspan=2, padx=(10, 0), sticky="ns")
+        self.max_size_status_var = tk.StringVar(value="")
+        max_size_link = tk.Label(
+            fields_group,
+            textvariable=self.max_size_status_var,
+            anchor="w",
+            justify="left",
+            fg=LINK_COLOR,
+            cursor="hand2",
+        )
+        self._max_size_link_font = tkfont.nametofont(max_size_link.cget("font")).copy()
+        self._max_size_link_font.configure(underline=True)
+        max_size_link.configure(font=self._max_size_link_font)
+        max_size_link.grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(4, 4))
+        max_size_link.bind("<Button-1>", lambda e: self.edit_max_size())
+        max_size_link.bind("<Enter>", lambda e: max_size_link.configure(fg=LINK_HOVER_COLOR))
+        max_size_link.bind("<Leave>", lambda e: max_size_link.configure(fg=LINK_COLOR))
+        ToolTip(max_size_link, "Click to change the max save size")
+        self._refresh_max_size_status()
 
-    def _build_controls(self, parent):
-        controls = tk.Frame(parent)
-        controls.pack(fill=tk.X, padx=5, pady=5)
-        for col in range(4):
-            controls.grid_columnconfigure(col, weight=1)
+        button_bar = tk.Frame(folder_bar)
+        button_bar.pack(side=tk.LEFT, anchor="center")
 
-        tk.Button(controls, text="Crop to Selection", command=self.apply_crop).grid(
-            row=0, column=0, padx=2, pady=2, sticky="ew"
-        )
-        tk.Button(controls, text="Reset", command=self.reset_image).grid(
-            row=0, column=1, padx=2, pady=2, sticky="ew"
-        )
-        tk.Button(controls, text="Save", command=self.save).grid(
-            row=0, column=2, columnspan=2, padx=2, pady=2, sticky="ew"
-        )
+        toolbar_buttons = [
+            ("select_folders", self.select_folders, "Select Folders"),
+            ("rotate_right", self.rotate_right, "Rotate Right"),
+            ("rotate_left", self.rotate_left, "Rotate Left"),
+            ("crop", self.apply_crop, "Crop to Selection"),
+            ("save", self.save, "Save"),
+        ]
+        for icon_name, command, tooltip_text in toolbar_buttons:
+            btn = tk.Button(
+                button_bar,
+                image=self.icons[icon_name],
+                command=command,
+                width=TOOLBAR_BUTTON_SIZE,
+                height=TOOLBAR_BUTTON_SIZE,
+            )
+            btn.pack(side=tk.LEFT, padx=2)
+            ToolTip(btn, tooltip_text)
 
     def _build_right_pane(self, parent):
         self.canvas = tk.Canvas(parent, background="#333333", highlightthickness=0)
@@ -569,7 +712,7 @@ class PhotoEditorApp(tk.Tk):
             return
         self.max_size_enabled, self.max_width, self.max_height = dialog.result
         self._persist_config()
-        self._refresh_message()
+        self._refresh_max_size_status()
         self._update_status()
 
     def on_tree_select(self, event):
@@ -736,10 +879,13 @@ class PhotoEditorApp(tk.Tk):
         self.status_output_var.set(f"Save size: {save_width} x {save_height}")
 
     def _refresh_message(self):
-        text = self._status_message_base
+        self.status_message_var.set(self._status_message_base)
+
+    def _refresh_max_size_status(self):
         if self.max_size_enabled and self.max_width and self.max_height:
-            text = f"{text}  [Max save size: {self.max_width} x {self.max_height}]"
-        self.status_message_var.set(text)
+            self.max_size_status_var.set(f"Max Save Size: {self.max_width} x {self.max_height}")
+        else:
+            self.max_size_status_var.set("Max Save Size: not set")
 
     def _set_message(self, text):
         self._status_message_base = text
