@@ -560,6 +560,9 @@ class PhotoEditorApp(tk.Tk):
         )
         self.target_folder_label.grid(row=1, column=1, sticky="ew", padx=(0, 4))
 
+        tk.Label(fields_group, text="Max Save Size:").grid(
+            row=2, column=0, sticky="w", padx=(4, 5), pady=(4, 4)
+        )
         self.max_size_status_var = tk.StringVar(value="")
         max_size_link = tk.Label(
             fields_group,
@@ -572,7 +575,7 @@ class PhotoEditorApp(tk.Tk):
         self._max_size_link_font = tkfont.nametofont(max_size_link.cget("font")).copy()
         self._max_size_link_font.configure(underline=True)
         max_size_link.configure(font=self._max_size_link_font)
-        max_size_link.grid(row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(4, 4))
+        max_size_link.grid(row=2, column=1, sticky="w", padx=(0, 4), pady=(4, 4))
         max_size_link.bind("<Button-1>", lambda e: self.edit_max_size())
         max_size_link.bind("<Enter>", lambda e: max_size_link.configure(fg=LINK_HOVER_COLOR))
         max_size_link.bind("<Leave>", lambda e: max_size_link.configure(fg=LINK_COLOR))
@@ -945,9 +948,9 @@ class PhotoEditorApp(tk.Tk):
 
     def _refresh_max_size_status(self):
         if self.max_size_enabled and self.max_width and self.max_height:
-            self.max_size_status_var.set(f"Max Save Size: {self.max_width} x {self.max_height}")
+            self.max_size_status_var.set(f"{self.max_width} x {self.max_height}")
         else:
-            self.max_size_status_var.set("Max Save Size: not set")
+            self.max_size_status_var.set("not set")
 
     def _set_message(self, text):
         self._status_message_base = text
