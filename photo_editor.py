@@ -1009,9 +1009,21 @@ class PhotoEditorApp(tk.Tk):
             self.canvas.config(cursor="fleur")
         else:
             self._drag_mode = "new"
-            self.selection_start = (event.x, event.y)
-            self.selection_box = (event.x, event.y, event.x, event.y)
+            x, y = self._clamp_to_image(event.x, event.y)
+            self.selection_start = (x, y)
+            self.selection_box = (x, y, x, y)
             self._redraw_selection()
+
+    def _clamp_to_image(self, x, y):
+        """Clamp a canvas-space point to the bounds of the displayed image, so a
+        crop selection can never extend past the image into the surrounding panel."""
+        off_x, off_y = self.display_offset
+        disp_w = self.current_image.width * self.display_scale
+        disp_h = self.current_image.height * self.display_scale
+        return (
+            max(off_x, min(x, off_x + disp_w)),
+            max(off_y, min(y, off_y + disp_h)),
+        )
 
     def _on_drag_move(self, event):
         if self._drag_mode == "move":
@@ -1023,7 +1035,8 @@ class PhotoEditorApp(tk.Tk):
             if self.selection_start is None:
                 return
             x0, y0 = self.selection_start
-            self.selection_box = (x0, y0, event.x, event.y)
+            x, y = self._clamp_to_image(event.x, event.y)
+            self.selection_box = (x0, y0, x, y)
             self._redraw_selection()
 
     def _move_selection(self, x, y):
