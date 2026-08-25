@@ -524,8 +524,30 @@ class PhotoEditorApp(tk.Tk):
         folder_bar = tk.Frame(parent)
         folder_bar.pack(fill=tk.X, padx=5, pady=5)
 
+        button_bar = tk.Frame(folder_bar)
+        button_bar.pack(side=tk.LEFT, anchor="center", padx=(0, 10))
+
+        toolbar_buttons = [
+            ("select_folders", self.select_folders, "Select Folders"),
+            ("open_processed_folder", self.open_processed_folder, "Open Processed Folder"),
+            ("rotate_right", self.rotate_right, "Rotate Right"),
+            ("rotate_left", self.rotate_left, "Rotate Left"),
+            ("crop", self.apply_crop, "Crop to Selection"),
+            ("save", self.save, "Save"),
+        ]
+        for icon_name, command, tooltip_text in toolbar_buttons:
+            btn = tk.Button(
+                button_bar,
+                image=self.icons[icon_name],
+                command=command,
+                width=TOOLBAR_BUTTON_SIZE,
+                height=TOOLBAR_BUTTON_SIZE,
+            )
+            btn.pack(side=tk.LEFT, padx=2)
+            ToolTip(btn, tooltip_text)
+
         fields_group = tk.LabelFrame(folder_bar)
-        fields_group.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        fields_group.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         fields_group.grid_columnconfigure(1, weight=1)
 
         tk.Label(fields_group, text="Source:").grid(row=0, column=0, sticky="w", padx=(4, 5), pady=(4, 0))
@@ -556,28 +578,6 @@ class PhotoEditorApp(tk.Tk):
         max_size_link.bind("<Leave>", lambda e: max_size_link.configure(fg=LINK_COLOR))
         ToolTip(max_size_link, "Click to change the max save size")
         self._refresh_max_size_status()
-
-        button_bar = tk.Frame(folder_bar)
-        button_bar.pack(side=tk.LEFT, anchor="center")
-
-        toolbar_buttons = [
-            ("select_folders", self.select_folders, "Select Folders"),
-            ("open_processed_folder", self.open_processed_folder, "Open Processed Folder"),
-            ("rotate_right", self.rotate_right, "Rotate Right"),
-            ("rotate_left", self.rotate_left, "Rotate Left"),
-            ("crop", self.apply_crop, "Crop to Selection"),
-            ("save", self.save, "Save"),
-        ]
-        for icon_name, command, tooltip_text in toolbar_buttons:
-            btn = tk.Button(
-                button_bar,
-                image=self.icons[icon_name],
-                command=command,
-                width=TOOLBAR_BUTTON_SIZE,
-                height=TOOLBAR_BUTTON_SIZE,
-            )
-            btn.pack(side=tk.LEFT, padx=2)
-            ToolTip(btn, tooltip_text)
 
     def _build_right_pane(self, parent):
         self.canvas = tk.Canvas(parent, background="#333333", highlightthickness=0)
