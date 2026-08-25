@@ -1063,6 +1063,14 @@ class PhotoEditorApp(tk.Tk):
         self._redraw_selection()
 
     def _on_drag_end(self, event):
+        if self._drag_mode == "new" and self.selection_box is not None:
+            x0, y0, x1, y1 = self.selection_box
+            if abs(x1 - x0) < SELECTION_MIN_SIZE or abs(y1 - y0) < SELECTION_MIN_SIZE:
+                # A plain click (no real drag) or a click outside an existing
+                # selection - don't leave a degenerate selection box behind,
+                # since any non-None selection_box counts as an unsaved change.
+                self.clear_selection()
+                self._redraw_selection()
         self.selection_start = None
         self._drag_mode = None
         self._on_hover(event)
