@@ -389,6 +389,12 @@ class MaxSizeDialog(tk.Toplevel):
         tk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side=tk.RIGHT)
 
         self.protocol("WM_DELETE_WINDOW", self._cancel)
+        # Wait for the window manager to actually map us before grabbing -
+        # grab_set() on an unmapped Toplevel raises "grab failed: window not
+        # viewable". A menu command reaches here after the menu's own dismissal
+        # has already pumped the event loop enough for us to be mapped, but a
+        # direct widget binding (e.g. the Max Save Size hyperlink) doesn't.
+        self.wait_visibility()
         self.grab_set()
         self.focus_set()
 
