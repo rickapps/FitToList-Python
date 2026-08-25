@@ -1229,9 +1229,15 @@ class PhotoEditorApp(tk.Tk):
             return
         if self.selection_box is not None and not self._crop_to_selection():
             return
+        was_processed = self._is_processed_image(self.image_path)
         if not self._save_current(show_confirmation=False):
             return
-        self._select_next_file()
+        if was_processed:
+            # Overwritten in place, not renamed - re-highlight the same node
+            # instead of advancing, since "next source image" doesn't apply.
+            self._select_tree_node_for_current_image()
+        else:
+            self._select_next_file()
 
     def _select_next_file(self):
         """Advance to the next source image after Process & Save. Selecting the node
