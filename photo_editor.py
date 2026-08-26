@@ -753,9 +753,12 @@ class PhotoEditorApp(tk.Tk):
             self._populate_tree()
         self._persist_config()
 
-    def _open_folder_in_file_manager(self, path, title):
-        if not os.path.isdir(path):
-            messagebox.showerror(title, f"Folder not found:\n{path}")
+    def _open_with_default_app(self, path, title, not_found_message):
+        """Open path in whatever program the OS has associated with it (a file
+        manager for a folder, a browser for an .html file, etc.), reporting an
+        error via a dialog instead of raising if it's missing or won't open."""
+        if not os.path.exists(path):
+            messagebox.showerror(title, not_found_message)
             return
         try:
             if os.name == "nt":
@@ -763,7 +766,10 @@ class PhotoEditorApp(tk.Tk):
             else:
                 subprocess.run(["xdg-open", path], check=False)
         except OSError as exc:
-            messagebox.showerror(title, f"Could not open folder:\n{exc}")
+            messagebox.showerror(title, f"Could not open:\n{path}\n\n{exc}")
+
+    def _open_folder_in_file_manager(self, path, title):
+        self._open_with_default_app(path, title, f"Folder not found:\n{path}")
 
     def open_source_folder(self):
         self._open_folder_in_file_manager(self.source_folder, "Open Source Folder")
@@ -1440,28 +1446,14 @@ class PhotoEditorApp(tk.Tk):
 
     # ---------- Help ----------
     def show_user_guide(self):
-        messagebox.showinfo(
+        """Open user_manual.html (shipped alongside this script) in the OS's
+        default handler for .html files - normally the system web browser."""
+        manual_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_manual.html")
+        self._open_with_default_app(
+            manual_path,
             "User Guide",
-            "1. File > Select Folders... to choose a source and processed folder.\n"
-            "2. Pick an image from the file list to load it.\n"
-            "3. Drag on the image to select a crop area, then Actions > Crop to Selection. Drag an "
-            "edge or corner of an existing selection to resize it, or drag inside it to move it; "
-            "while a selection is active, the status bar shows its size in place of the usual "
-            "message.\n"
-            "4. Use Actions > Rotate Left/Right or Reverse Image to change orientation. Actions > "
-            "Straighten shows a line across the image - drag either end to tilt it up to 30 degrees "
-            "(useful for leveling a crooked horizon), then double-click the image to apply, or press "
-            "Esc to cancel. Straighten never crops; use Crop to Selection afterward to trim the "
-            "corners it exposes, and you can straighten again if 30 degrees wasn't enough.\n"
-            "5. File > Save (or Actions > Process & Save) to write the result to the processed folder.\n"
-            "6. Reset restores the image to how it was loaded.\n"
-            "7. File > Max Save Size... sets a maximum width/height applied to images when "
-            "they're saved, shrinking them (preserving aspect ratio) if they're larger. Images "
-            "are never enlarged. This does not change the image on screen, only the saved file. "
-            "When active, it's noted in the status bar.\n"
-            "8. Most of these actions - Select Folders, Open Processed Folder, Rotate, Crop to "
-            "Selection, Straighten, and Save - are also available as icon buttons in the toolbar, as "
-            "a shortcut to the File/Actions menus.",
+            f"Could not find the user manual:\n{manual_path}\n\n"
+            "It should be installed alongside photo_editor.py.",
         )
 
     def show_about(self):

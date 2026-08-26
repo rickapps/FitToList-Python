@@ -48,9 +48,11 @@ python photo_editor.py
 
 On first launch, use **File > Select Folders...** to choose a source folder (where your original images live) and a processed folder (where edited copies will be written).
 
+For the full walkthrough of every feature, see [`user_manual.html`](user_manual.html) or open it from inside the app via **Help > User Guide** (opens in your default browser).
+
 ## For developers
 
-FitToList is intentionally a single-file script (`photo_editor.py`) with no build step, packaging config, or test suite — just the script plus its Pillow dependency. This keeps it easy to read top to bottom and easy to fork or modify for a slightly different workflow.
+FitToList is intentionally a single-file script (`photo_editor.py`) with no build step, packaging config, or test suite — just the script plus its Pillow dependency and the standalone `user_manual.html` it opens for Help > User Guide. This keeps it easy to read top to bottom and easy to fork or modify for a slightly different workflow.
 
 A few things worth knowing before making changes:
 
@@ -60,6 +62,7 @@ A few things worth knowing before making changes:
 - **A small state machine drives the crop selection UI** — `self.selection_box` plus `self._drag_mode` (`None`, `"new"`, `"move"`, or `"resize-{edge}"`). `_hit_test()` figures out what a click landed on, and `_on_drag_start`/`_on_drag_move` route to the right behavior.
 - **Straighten is a separate, mutually-exclusive overlay mode** (`self.straighten_active`/`self.straighten_angle`) layered onto the same canvas event handlers — while it's active they route to `_straighten_hit_test`/`_update_straighten_angle` instead of the crop-selection logic. It never rotates `current_image` (or its live thumbnail) while dragging, only a guide line drawn over the untouched image; `apply_straighten()` performs the one actual `Image.rotate()` on commit.
 - **The file tree** (`self.file_tree`) shows one node per source image with processed outputs nested underneath, matched purely by filename convention (`{root}_NN{ext}`) — there's no separate metadata file linking a processed image back to its source.
+- **Help > User Guide** doesn't build any UI itself; it hands `user_manual.html` (resolved next to `photo_editor.py` via `__file__`, not the current working directory) off to the OS's default handler through `_open_with_default_app()`, the same helper `open_source_folder`/`open_processed_folder` use. Editing the manual means editing that HTML file directly, not Python strings.
 - There's no automated test suite; since this is a Tkinter GUI app, changes should be verified by actually running `python photo_editor.py` and exercising the affected workflow (loading images, dragging a selection, cropping, rotating, saving, and reopening a processed file) by hand.
 
 See `CLAUDE.md` in this repository for a more detailed architectural walkthrough, including the redraw flow and the two distinct save behaviors (new file vs. overwrite-in-place).

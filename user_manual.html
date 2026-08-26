@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FitToList User Guide</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 780px;
+    margin: 2rem auto;
+    padding: 0 1.5rem;
+    line-height: 1.5;
+    color: #222;
+  }
+  h1 { border-bottom: 2px solid #1a56db; padding-bottom: 0.3rem; }
+  h2 { margin-top: 2rem; color: #1a56db; }
+  code {
+    background: #f0f0f0;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.95em;
+  }
+  table { border-collapse: collapse; margin: 1rem 0; }
+  th, td { border: 1px solid #ccc; padding: 0.4rem 0.8rem; text-align: left; }
+  th { background: #f5f5f5; }
+  .tip {
+    background: #eef4ff;
+    border-left: 4px solid #1a56db;
+    padding: 0.6rem 1rem;
+    margin: 1rem 0;
+  }
+</style>
+</head>
+<body>
+
+<h1>FitToList User Guide</h1>
+<p>FitToList helps you crop, straighten, and resize a whole folder of photos quickly. Work through your source images one at a time, editing each and saving it into a separate processed folder.</p>
+
+<h2>1. Select your folders</h2>
+<p><strong>File &gt; Select Folders...</strong> opens a dialog for choosing both:</p>
+<ul>
+  <li><strong>Source</strong> &mdash; the folder containing your original images.</li>
+  <li><strong>Processed</strong> &mdash; where edited copies are written. This cannot be the same folder as Source.</li>
+</ul>
+<p>The file list on the left shows every source image, with any processed versions already saved for it nested underneath. Selecting either loads it into the editor.</p>
+
+<h2>2. Crop</h2>
+<p>Drag anywhere on the image to draw a crop selection. Once drawn, you can:</p>
+<ul>
+  <li>Drag an edge or corner to resize it.</li>
+  <li>Drag inside it to move it without resizing.</li>
+</ul>
+<p>While a selection is active, the status bar shows its size in image pixels. Use <strong>Actions &gt; Crop to Selection</strong> to apply it, or just <strong>double-click inside the selection</strong> to crop <em>and</em> save in one step.</p>
+
+<h2>3. Straighten</h2>
+<p>Use <strong>Actions &gt; Straighten</strong> to fix a slightly crooked photo &mdash; a tilted horizon, for example &mdash; without the limitation of the 90&deg;-only Rotate commands.</p>
+<ol>
+  <li>Starting Straighten draws a level line across the image, with a draggable handle at each end.</li>
+  <li>Drag either end (up to 30&deg; in either direction) to line it up with a tilted feature in the photo. The image itself doesn't move while you drag &mdash; only the line &mdash; so you can align it precisely by eye.</li>
+  <li><strong>Double-click</strong> anywhere on the image to apply the rotation, or press <strong>Esc</strong> to cancel without changing anything.</li>
+</ol>
+<div class="tip">
+  Straighten never crops the image for you. Rotating exposes blank corners, which are filled in white (or left transparent). Follow up with <strong>Crop to Selection</strong> to trim them, and run Straighten again if 30&deg; wasn't enough correction.
+</div>
+
+<h2>4. Rotate and flip</h2>
+<table>
+  <tr><th>Command</th><th>Effect</th></tr>
+  <tr><td>Actions &gt; Rotate Right / Rotate Left</td><td>Rotates the image 90&deg; at a time.</td></tr>
+  <tr><td>Actions &gt; Reverse Image</td><td>Flips the image horizontally (mirror image).</td></tr>
+</table>
+
+<h2>5. Reset</h2>
+<p><strong>Actions &gt; Reset</strong> discards every edit made since the image was loaded and restores it exactly as it was read from disk.</p>
+
+<h2>6. Save</h2>
+<ul>
+  <li><strong>File &gt; Save</strong> writes your edits to the processed folder.</li>
+  <li><strong>Actions &gt; Process &amp; Save</strong> saves and then automatically advances to the next unprocessed source image &mdash; the fastest way to work through a whole folder.</li>
+</ul>
+<p>Saving a <em>source</em> image always writes a new file (never overwriting the original), named <code>name_00.ext</code>, <code>name_01.ext</code>, and so on. Reopening one of those <em>processed</em> files and saving again overwrites it in place instead, with a confirmation prompt if you have unsaved changes.</p>
+
+<h2>7. Max Save Size</h2>
+<p><strong>File &gt; Max Save Size...</strong> (or the link in the top bar) sets an optional maximum width and height applied only when saving. Oversized images are shrunk to fit, preserving aspect ratio; images are never enlarged. This never changes what's shown on screen &mdash; only the saved file. When set, it's shown in the top bar and reflected in the status bar's "Save size."</p>
+
+<h2>Toolbar reference</h2>
+<table>
+  <tr><th>Icon</th><th>Action</th></tr>
+  <tr><td>Folder</td><td>Select Folders...</td></tr>
+  <tr><td>Folder with arrow</td><td>Open Processed Folder</td></tr>
+  <tr><td>Curved arrow (right)</td><td>Rotate Right</td></tr>
+  <tr><td>Curved arrow (left)</td><td>Rotate Left</td></tr>
+  <tr><td>Corner brackets</td><td>Crop to Selection</td></tr>
+  <tr><td>Tilted line</td><td>Straighten</td></tr>
+  <tr><td>Disk</td><td>Save</td></tr>
+</table>
+
+<h2>Unsaved changes</h2>
+<p>If you try to switch images or folders while you have an uncommitted crop selection, a pending Straighten, or unsaved edits, FitToList asks whether to save, discard, or cancel &mdash; so you won't lose work by accident.</p>
+
+</body>
+</html>
