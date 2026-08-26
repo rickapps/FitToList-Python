@@ -14,6 +14,9 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
 SELECTION_BORDER_MARGIN = 6  # canvas px within which a border-hover/resize is detected
 SELECTION_MIN_SIZE = 4       # minimum selection width/height in canvas px while resizing
 
+STRAIGHTEN_MAX_ANGLE = 30      # degrees, max tilt in either direction for the Straighten tool
+STRAIGHTEN_HANDLE_MARGIN = 8   # canvas px within which a click/hover grabs a straighten handle
+
 TOOLBAR_ICON_SIZE = 28   # px, source size for generated toolbar icons
 TOOLBAR_BUTTON_SIZE = 36  # px, fixed width/height applied to every toolbar button
 
@@ -82,6 +85,17 @@ def _draw_crop_icon(draw, size, fg):
     )
 
 
+def _draw_straighten_icon(draw, size, fg):
+    pad = size * 0.18
+    tilt = size * 0.12
+    x0, y0 = pad, size - pad - tilt
+    x1, y1 = size - pad, pad + tilt
+    draw.line([(x0, y0), (x1, y1)], fill=fg, width=3)
+    r = size * 0.07
+    draw.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], outline=fg, width=2)
+    draw.ellipse([x1 - r, y1 - r, x1 + r, y1 + r], outline=fg, width=2)
+
+
 def _draw_save_icon(draw, size, fg):
     pad = size * 0.11
     draw.rectangle([pad, pad, size - pad, size - pad], outline=fg, width=2)
@@ -111,6 +125,7 @@ def build_toolbar_icons(size=TOOLBAR_ICON_SIZE, fg="#333333"):
         "rotate_right": lambda d: _draw_rotate_icon(d, size, fg, clockwise=True),
         "rotate_left": lambda d: _draw_rotate_icon(d, size, fg, clockwise=False),
         "crop": lambda d: _draw_crop_icon(d, size, fg),
+        "straighten": lambda d: _draw_straighten_icon(d, size, fg),
         "save": lambda d: _draw_save_icon(d, size, fg),
     }
     icons = {}
@@ -450,8 +465,13 @@ class PhotoEditorApp(tk.Tk):
         self._drag_mode = None       # "new" or "move"
         self._drag_offset = (0, 0)   # click point relative to selection's top-left, for "move"
         self._selection_size = (0, 0)  # (width, height) preserved while moving
+        self.straighten_active = False   # True while the Straighten line is shown/adjustable
+        self.straighten_angle = 0.0      # pending tilt in degrees, clamped to +/-STRAIGHTEN_MAX_ANGLE
+        self._straighten_drag_handle = None  # "left" or "right" while dragging that line endpoint
 
         self.icons = build_toolbar_icons()  # kept referenced here so Tkinter doesn't GC them
+
+        self.bind("<Escape>", lambda e: self.cancel_straighten())
 
         self._build_menu()
         self._build_layout()
@@ -474,6 +494,9 @@ class PhotoEditorApp(tk.Tk):
 
         actions_menu = tk.Menu(menubar, tearoff=False)
         actions_menu.add_command(label="Crop to Selection", command=self.apply_crop)
+        actions_menu.add_command(
+            label="Straighten", command=self.start_straighten, accelerator="Drag ends, double-click to apply"
+        )
         actions_menu.add_command(label="Rotate Right", command=self.rotate_right)
         actions_menu.add_command(label="Rotate Left", command=self.rotate_left)
         actions_menu.add_command(label="Reverse Image", command=self.reverse_image)
@@ -533,6 +556,7 @@ class PhotoEditorApp(tk.Tk):
             ("rotate_right", self.rotate_right, "Rotate Right"),
             ("rotate_left", self.rotate_left, "Rotate Left"),
             ("crop", self.apply_crop, "Crop to Selection"),
+            ("straighten", self.start_straighten, "Straighten"),
             ("save", self.save, "Save"),
         ]
         for icon_name, command, tooltip_text in toolbar_buttons:
@@ -805,7 +829,9 @@ class PhotoEditorApp(tk.Tk):
             self._load_image(self._tree_paths[target_iid])
 
     def _has_unsaved_changes(self):
-        return self.current_image is not None and (self.is_dirty or self.selection_box is not None)
+        return self.current_image is not None and (
+            self.is_dirty or self.selection_box is not None or self.straighten_active
+        )
 
     def _confirm_discard_changes(self):
         """If the loaded image has unsaved edits, ask the user how to proceed.
@@ -823,6 +849,8 @@ class PhotoEditorApp(tk.Tk):
         if response is None:
             return False
         if response:
+            if self.straighten_active:
+                self.apply_straighten()
             if self.selection_box is not None and not self._crop_to_selection():
                 return False
             # Already confirmed above (with overwrite-specific wording if applicable) - don't ask again.
@@ -841,6 +869,8 @@ class PhotoEditorApp(tk.Tk):
         self.original_image = image
         self.current_image = image.copy()
         self.is_dirty = False
+        self.straighten_active = False
+        self.straighten_angle = 0.0
         self.clear_selection()
         self._redraw()
         self._set_message("Drag on the image to select a crop area.")
@@ -850,6 +880,8 @@ class PhotoEditorApp(tk.Tk):
         self.original_image = None
         self.current_image = None
         self.is_dirty = False
+        self.straighten_active = False
+        self.straighten_angle = 0.0
         self.clear_selection()
         self.canvas.delete("all")
         self._set_message("Select a photo from the list to begin.")
@@ -875,6 +907,7 @@ class PhotoEditorApp(tk.Tk):
         self.display_offset = (offset_x, offset_y)
         self.canvas.create_image(offset_x, offset_y, anchor="nw", image=self.display_photo, tags="image")
         self._redraw_selection()
+        self._redraw_straighten()
 
     # ---------- Crop selection ----------
     def _redraw_selection(self):
@@ -935,12 +968,17 @@ class PhotoEditorApp(tk.Tk):
         self._refresh_message()
 
     def _refresh_message(self):
-        """Set the message panel: while there's an active selection, show its live
-        size (formerly its own status bar panel) and the crop hint in place of the
-        base message, updating as the user drags to move or resize it; otherwise
-        fall back to the current base message."""
+        """Set the message panel: while Straighten is active or there's an active
+        selection, show its live angle/size and the relevant hint in place of the
+        base message, updating as the user drags; otherwise fall back to the
+        current base message."""
         selection_size = self._selection_image_size()
-        if selection_size:
+        if self.straighten_active:
+            text = (
+                f"Straighten: {self.straighten_angle:+.1f}°   |   "
+                "Drag either end of the line, double-click to apply, Esc to cancel."
+            )
+        elif selection_size:
             text = f"Selection: {selection_size[0]} x {selection_size[1]}   |   Double click to crop and save."
         else:
             text = self._status_message_base
@@ -985,7 +1023,11 @@ class PhotoEditorApp(tk.Tk):
         return None
 
     def _on_hover(self, event):
-        if self._drag_mode is not None:
+        if self._drag_mode is not None or self._straighten_drag_handle is not None:
+            return
+        if self.straighten_active:
+            hit = self._straighten_hit_test(event.x, event.y)
+            self.canvas.config(cursor="fleur" if hit else "")
             return
         hit = self._hit_test(event.x, event.y)
         if hit in ("left", "right"):
@@ -997,6 +1039,9 @@ class PhotoEditorApp(tk.Tk):
 
     def _on_drag_start(self, event):
         if self.current_image is None:
+            return
+        if self.straighten_active:
+            self._straighten_drag_handle = self._straighten_hit_test(event.x, event.y)
             return
         hit = self._hit_test(event.x, event.y)
         if hit in ("left", "right", "top", "bottom"):
@@ -1035,6 +1080,10 @@ class PhotoEditorApp(tk.Tk):
         )
 
     def _on_drag_move(self, event):
+        if self.straighten_active:
+            if self._straighten_drag_handle:
+                self._update_straighten_angle(event.x, event.y)
+            return
         if self._drag_mode == "move":
             self._move_selection(event.x, event.y)
         elif self._drag_mode and self._drag_mode.startswith("resize-"):
@@ -1085,6 +1134,9 @@ class PhotoEditorApp(tk.Tk):
         self._redraw_selection()
 
     def _on_drag_end(self, event):
+        if self.straighten_active:
+            self._straighten_drag_handle = None
+            return
         if self._drag_mode == "new" and self.selection_box is not None:
             x0, y0, x1, y1 = self.selection_box
             if abs(x1 - x0) < SELECTION_MIN_SIZE or abs(y1 - y0) < SELECTION_MIN_SIZE:
@@ -1098,6 +1150,9 @@ class PhotoEditorApp(tk.Tk):
         self._on_hover(event)
 
     def _on_canvas_double_click(self, event):
+        if self.straighten_active:
+            self.apply_straighten()
+            return
         if self._hit_test(event.x, event.y) == "inside":
             self.process_and_save()
 
@@ -1131,6 +1186,109 @@ class PhotoEditorApp(tk.Tk):
         self._redraw()
         self._set_message("Cropped.")
         return True
+
+    # ---------- Straighten ----------
+    @staticmethod
+    def _straighten_fill_color(mode):
+        """Color used to fill the corners exposed by apply_straighten()'s rotation."""
+        return (0, 0, 0, 0) if "A" in mode else (255, 255, 255)
+
+    def _straighten_line_points(self):
+        """Endpoints of the straighten reference line in canvas coordinates, derived
+        purely from straighten_angle so both ends always move symmetrically around
+        the image's center - a drag can only ever produce a pure rotation. The
+        underlying image is left untouched while dragging (classic "ruler" tool
+        behavior): the line is a guide for eyeballing against a tilted feature in
+        the photo, and the actual rotation happens once, in apply_straighten()."""
+        if not self.straighten_active or self.current_image is None:
+            return None
+        off_x, off_y = self.display_offset
+        disp_w = self.current_image.width * self.display_scale
+        disp_h = self.current_image.height * self.display_scale
+        cx, cy = off_x + disp_w / 2, off_y + disp_h / 2
+        half_len = disp_w * 0.35
+        angle_rad = math.radians(self.straighten_angle)
+        dx, dy = half_len * math.cos(angle_rad), half_len * math.sin(angle_rad)
+        return (cx - dx, cy - dy, cx + dx, cy + dy)
+
+    def _straighten_hit_test(self, x, y):
+        """Return "left"/"right" if (x, y) is near that endpoint of the straighten
+        line, else None."""
+        points = self._straighten_line_points()
+        if points is None:
+            return None
+        x0, y0, x1, y1 = points
+        margin = STRAIGHTEN_HANDLE_MARGIN
+        if abs(x - x0) <= margin and abs(y - y0) <= margin:
+            return "left"
+        if abs(x - x1) <= margin and abs(y - y1) <= margin:
+            return "right"
+        return None
+
+    def _redraw_straighten(self):
+        self.canvas.delete("straighten")
+        points = self._straighten_line_points()
+        if points is None:
+            return
+        x0, y0, x1, y1 = points
+        self.canvas.create_line(x0, y0, x1, y1, fill="yellow", width=2, tags="straighten")
+        r = 5
+        for hx, hy in ((x0, y0), (x1, y1)):
+            self.canvas.create_oval(
+                hx - r, hy - r, hx + r, hy + r, fill="yellow", outline="black", tags="straighten"
+            )
+
+    def _update_straighten_angle(self, x, y):
+        off_x, off_y = self.display_offset
+        disp_w = self.current_image.width * self.display_scale
+        disp_h = self.current_image.height * self.display_scale
+        cx, cy = off_x + disp_w / 2, off_y + disp_h / 2
+        dx, dy = x - cx, y - cy
+        if self._straighten_drag_handle == "left":
+            dx, dy = -dx, -dy
+        angle = math.degrees(math.atan2(dy, dx))
+        self.straighten_angle = max(-STRAIGHTEN_MAX_ANGLE, min(STRAIGHTEN_MAX_ANGLE, angle))
+        self._redraw()
+
+    def start_straighten(self):
+        if self.current_image is None:
+            return
+        self.clear_selection()
+        self.straighten_active = True
+        self.straighten_angle = 0.0
+        self._straighten_drag_handle = None
+        self._redraw()
+        self._set_message("Drag either end of the line, then double-click to apply. Esc to cancel.")
+
+    def cancel_straighten(self):
+        if not self.straighten_active:
+            return
+        self.straighten_active = False
+        self.straighten_angle = 0.0
+        self._straighten_drag_handle = None
+        self._redraw()
+        self._set_message("Straighten cancelled.")
+
+    def apply_straighten(self):
+        if not self.straighten_active or self.current_image is None:
+            return
+        angle = self.straighten_angle
+        self.straighten_active = False
+        self.straighten_angle = 0.0
+        self._straighten_drag_handle = None
+        if angle:
+            # PIL's rotate(angle) turns a point that sits at `angle` (atan2(dy, dx),
+            # y-down) from center onto the positive x-axis - i.e. it levels a line
+            # traced at that angle, so no sign flip is needed here. Verified
+            # empirically; see the Straighten section of CLAUDE.md.
+            fill = self._straighten_fill_color(self.current_image.mode)
+            self.current_image = self.current_image.rotate(
+                angle, resample=Image.BICUBIC, expand=True, fillcolor=fill
+            )
+            self.is_dirty = True
+        self.clear_selection()
+        self._redraw()
+        self._set_message(f"Straightened by {angle:+.1f}°." if angle else "No tilt applied.")
 
     # ---------- Rotate / Flip ----------
     def rotate_right(self):
@@ -1290,7 +1448,11 @@ class PhotoEditorApp(tk.Tk):
             "edge or corner of an existing selection to resize it, or drag inside it to move it; "
             "while a selection is active, the status bar shows its size in place of the usual "
             "message.\n"
-            "4. Use Actions > Rotate Left/Right or Reverse Image to change orientation.\n"
+            "4. Use Actions > Rotate Left/Right or Reverse Image to change orientation. Actions > "
+            "Straighten shows a line across the image - drag either end to tilt it up to 30 degrees "
+            "(useful for leveling a crooked horizon), then double-click the image to apply, or press "
+            "Esc to cancel. Straighten never crops; use Crop to Selection afterward to trim the "
+            "corners it exposes, and you can straighten again if 30 degrees wasn't enough.\n"
             "5. File > Save (or Actions > Process & Save) to write the result to the processed folder.\n"
             "6. Reset restores the image to how it was loaded.\n"
             "7. File > Max Save Size... sets a maximum width/height applied to images when "
@@ -1298,8 +1460,8 @@ class PhotoEditorApp(tk.Tk):
             "are never enlarged. This does not change the image on screen, only the saved file. "
             "When active, it's noted in the status bar.\n"
             "8. Most of these actions - Select Folders, Open Processed Folder, Rotate, Crop to "
-            "Selection, and Save - are also available as icon buttons in the toolbar, as a shortcut "
-            "to the File/Actions menus.",
+            "Selection, Straighten, and Save - are also available as icon buttons in the toolbar, as "
+            "a shortcut to the File/Actions menus.",
         )
 
     def show_about(self):

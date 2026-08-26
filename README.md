@@ -1,6 +1,6 @@
 # FitToList
 
-FitToList is a lightweight desktop tool for cropping and resizing a whole folder of photos in one sitting. It's built for the "batch prep" workflow: point it at a folder of source images and a destination folder, then work through the source images one at a time — drag out a crop, straighten with a rotate, and save. Each save writes a new file into the destination folder and automatically advances you to the next unprocessed source image, so you can move through a large shoot without touching a mouse menu between photos.
+FitToList is a lightweight desktop tool for cropping and resizing a whole folder of photos in one sitting. It's built for the "batch prep" workflow: point it at a folder of source images and a destination folder, then work through the source images one at a time — drag out a crop, straighten a crooked shot, rotate/flip, and save. Each save writes a new file into the destination folder and automatically advances you to the next unprocessed source image, so you can move through a large shoot without touching a mouse menu between photos.
 
 It's aimed at anyone who needs to prep multiple images the same way — for a marketplace listing, a catalog, a website gallery, or similar — rather than at general-purpose photo editing.
 
@@ -9,6 +9,7 @@ It's aimed at anyone who needs to prep multiple images the same way — for a ma
 - **Folder-based batch workflow** — select a source folder and a processed (output) folder once; the file list shows every source image next to the processed versions already saved for it.
 - **Interactive crop selection** — drag directly on the image to draw a crop box, then drag its edges/corners to resize or drag inside it to reposition, with live selection dimensions shown in the status bar.
 - **Crop to Selection** — commit the current selection, or just double-click inside it to crop and save in one step (**Process & Save**).
+- **Straighten** — draw a level line and drag either end (up to 30° in either direction) to trace a tilted feature like a horizon; double-click to level the image around it. Run it again if 30° isn't enough, and use Crop to Selection afterward to trim the corners it exposes — it never crops for you.
 - **Rotate left/right and horizontal flip (Reverse Image)**.
 - **Reset** — revert the current image back to exactly how it was loaded from disk, discarding all edits.
 - **Non-destructive originals** — the original file on disk is never modified; edits apply to a working copy, and a new file is written to the processed folder on save.
@@ -18,7 +19,7 @@ It's aimed at anyone who needs to prep multiple images the same way — for a ma
 - **Optional max save size** — set a maximum width/height (File > Max Save Size...) to automatically shrink oversized images on save while preserving aspect ratio; images are never enlarged, and this never alters what's shown on screen.
 - **Unsaved-changes protection** — switching images or folders with pending edits prompts you to save, discard, or cancel.
 - **Persisted settings** — the last-used source/processed folders and max save size are remembered between sessions.
-- **Toolbar shortcuts** for the most common actions (select folders, open processed folder, rotate, crop, save), plus a full File/Actions/Help menu.
+- **Toolbar shortcuts** for the most common actions (select folders, open processed folder, rotate, crop, straighten, save), plus a full File/Actions/Help menu.
 
 ## Installing and running
 
@@ -57,6 +58,7 @@ A few things worth knowing before making changes:
 - **Two image buffers drive all editing**: `self.original_image` is loaded from disk and never mutated; `self.current_image` is the working copy that every edit (crop, rotate, flip, reset) applies to. Saving always writes `current_image`.
 - **Two coordinate spaces**: mouse events on the canvas (drag to select/move/resize a crop box) are handled in *canvas* pixel coordinates, while the underlying image is manipulated in *image* pixel coordinates. `self.display_scale` and `self.display_offset` (recomputed in `_redraw()` on every resize/edit) convert between the two; `apply_crop()`/`_crop_to_selection()` is the main place that conversion happens.
 - **A small state machine drives the crop selection UI** — `self.selection_box` plus `self._drag_mode` (`None`, `"new"`, `"move"`, or `"resize-{edge}"`). `_hit_test()` figures out what a click landed on, and `_on_drag_start`/`_on_drag_move` route to the right behavior.
+- **Straighten is a separate, mutually-exclusive overlay mode** (`self.straighten_active`/`self.straighten_angle`) layered onto the same canvas event handlers — while it's active they route to `_straighten_hit_test`/`_update_straighten_angle` instead of the crop-selection logic. It never rotates `current_image` (or its live thumbnail) while dragging, only a guide line drawn over the untouched image; `apply_straighten()` performs the one actual `Image.rotate()` on commit.
 - **The file tree** (`self.file_tree`) shows one node per source image with processed outputs nested underneath, matched purely by filename convention (`{root}_NN{ext}`) — there's no separate metadata file linking a processed image back to its source.
 - There's no automated test suite; since this is a Tkinter GUI app, changes should be verified by actually running `python photo_editor.py` and exercising the affected workflow (loading images, dragging a selection, cropping, rotating, saving, and reopening a processed file) by hand.
 
