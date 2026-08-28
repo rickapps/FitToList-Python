@@ -472,6 +472,8 @@ class PhotoEditorApp(tk.Tk):
         self.straighten_active = False   # True while the Straighten line is shown/adjustable
         self.straighten_angle = 0.0      # pending tilt in degrees, clamped to +/-STRAIGHTEN_MAX_ANGLE
         self._straighten_drag_handle = None  # "left" or "right" while dragging that line endpoint
+        self._straighten_base_image = None   # current_image as of start_straighten(), pre-rotation
+        self._straighten_total_angle = 0.0   # cumulative angle already baked into current_image this session
 
         self.icons = build_toolbar_icons()  # kept referenced here so Tkinter doesn't GC them
 
@@ -499,7 +501,7 @@ class PhotoEditorApp(tk.Tk):
         actions_menu = tk.Menu(menubar, tearoff=False)
         actions_menu.add_command(label="Crop to Selection", command=self.apply_crop)
         actions_menu.add_command(
-            label="Straighten", command=self.start_straighten, accelerator="Drag ends, double-click to apply"
+            label="Straighten", command=self.toggle_straighten, accelerator="Rotates on drag release; click again to cancel"
         )
         actions_menu.add_command(label="Rotate Right", command=self.rotate_right)
         actions_menu.add_command(label="Rotate Left", command=self.rotate_left)
@@ -560,7 +562,7 @@ class PhotoEditorApp(tk.Tk):
             ("rotate_right", self.rotate_right, "Rotate Right"),
             ("rotate_left", self.rotate_left, "Rotate Left"),
             ("crop", self.apply_crop, "Crop to Selection"),
-            ("straighten", self.start_straighten, "Straighten"),
+            ("straighten", self.toggle_straighten, "Straighten"),
             ("save", self.save, "Save"),
         ]
         for icon_name, command, tooltip_text in toolbar_buttons:
@@ -881,6 +883,8 @@ class PhotoEditorApp(tk.Tk):
         self.is_dirty = False
         self.straighten_active = False
         self.straighten_angle = 0.0
+        self._straighten_base_image = None
+        self._straighten_total_angle = 0.0
         self.clear_selection()
         self._redraw()
         self._set_message("Drag on the image to select a crop area.")
@@ -892,6 +896,8 @@ class PhotoEditorApp(tk.Tk):
         self.is_dirty = False
         self.straighten_active = False
         self.straighten_angle = 0.0
+        self._straighten_base_image = None
+        self._straighten_total_angle = 0.0
         self.clear_selection()
         self.canvas.delete("all")
         self._set_message("Select a photo from the list to begin.")
@@ -1051,7 +1057,12 @@ class PhotoEditorApp(tk.Tk):
         if self.current_image is None:
             return
         if self.straighten_active:
-            self._straighten_drag_handle = self._straighten_hit_test(event.x, event.y)
+            hit = self._straighten_hit_test(event.x, event.y)
+            if hit is None:
+                # Clicking anywhere but the drag handles dismisses the tool.
+                self.cancel_straighten()
+                return
+            self._straighten_drag_handle = hit
             return
         hit = self._hit_test(event.x, event.y)
         if hit in ("left", "right", "top", "bottom"):
@@ -1165,6 +1176,8 @@ class PhotoEditorApp(tk.Tk):
 
     def _on_drag_end(self, event):
         if self.straighten_active:
+            if self._straighten_drag_handle:
+                self.apply_straighten(keep_active=True)
             self._straighten_drag_handle = None
             return
         if self._drag_mode == "new" and self.selection_box is not None:
@@ -1183,7 +1196,6 @@ class PhotoEditorApp(tk.Tk):
 
     def _on_canvas_double_click(self, event):
         if self.straighten_active:
-            self.apply_straighten()
             return
         if self._hit_test(event.x, event.y) == "inside":
             self.process_and_save()
@@ -1282,6 +1294,14 @@ class PhotoEditorApp(tk.Tk):
         self.straighten_angle = max(-STRAIGHTEN_MAX_ANGLE, min(STRAIGHTEN_MAX_ANGLE, angle))
         self._redraw()
 
+    def toggle_straighten(self):
+        """The Straighten action button/menu item: start the tool, or - while
+        the guide line is showing - cancel it."""
+        if self.straighten_active:
+            self.cancel_straighten()
+        else:
+            self.start_straighten()
+
     def start_straighten(self):
         if self.current_image is None:
             return
@@ -1289,8 +1309,14 @@ class PhotoEditorApp(tk.Tk):
         self.straighten_active = True
         self.straighten_angle = 0.0
         self._straighten_drag_handle = None
+        # Snapshot the pre-rotation image once; every adjustment this session
+        # re-rotates this snapshot by the cumulative angle (see apply_straighten)
+        # rather than re-rotating the already-rotated current_image, so repeated
+        # small adjustments don't compound expand()'d white space or resample blur.
+        self._straighten_base_image = self.current_image.copy()
+        self._straighten_total_angle = 0.0
         self._redraw()
-        self._set_message("Drag either end of the line, then double-click to apply. Esc to cancel.")
+        self._set_message("Drag either end of the line to straighten. Click elsewhere or press Esc to finish.")
 
     def cancel_straighten(self):
         if not self.straighten_active:
@@ -1298,26 +1324,42 @@ class PhotoEditorApp(tk.Tk):
         self.straighten_active = False
         self.straighten_angle = 0.0
         self._straighten_drag_handle = None
+        self._straighten_base_image = None
+        self._straighten_total_angle = 0.0
         self._redraw()
         self._set_message("Straighten cancelled.")
 
-    def apply_straighten(self):
+    def apply_straighten(self, keep_active=False):
+        """Rotate current_image by the pending straighten_angle. When keep_active
+        is True (a drag just ended), the guide line stays up - reset to horizontal,
+        since the image is now level - so the user can drag again to fine-tune;
+        otherwise (finalizing, e.g. before switching images) the tool closes."""
         if not self.straighten_active or self.current_image is None:
             return
         angle = self.straighten_angle
-        self.straighten_active = False
         self.straighten_angle = 0.0
         self._straighten_drag_handle = None
         if angle:
+            total_angle = self._straighten_total_angle + angle
+            # Always rotate the pristine pre-straighten snapshot by the full
+            # cumulative angle, not the already-rotated current_image - otherwise
+            # each adjustment pads and resamples an image that's already padded
+            # and resampled, so the photo keeps shrinking relative to the canvas.
+            #
             # PIL's rotate(angle) turns a point that sits at `angle` (atan2(dy, dx),
             # y-down) from center onto the positive x-axis - i.e. it levels a line
             # traced at that angle, so no sign flip is needed here. Verified
             # empirically; see the Straighten section of CLAUDE.md.
-            fill = self._straighten_fill_color(self.current_image.mode)
-            self.current_image = self.current_image.rotate(
-                angle, resample=Image.BICUBIC, expand=True, fillcolor=fill
+            fill = self._straighten_fill_color(self._straighten_base_image.mode)
+            self.current_image = self._straighten_base_image.rotate(
+                total_angle, resample=Image.BICUBIC, expand=True, fillcolor=fill
             )
+            self._straighten_total_angle = total_angle
             self.is_dirty = True
+        if not keep_active:
+            self.straighten_active = False
+            self._straighten_base_image = None
+            self._straighten_total_angle = 0.0
         self.clear_selection()
         self._redraw()
         self._set_message(f"Straightened by {angle:+.1f}°." if angle else "No tilt applied.")
