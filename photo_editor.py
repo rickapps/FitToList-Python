@@ -11,8 +11,9 @@ from tkinter import messagebox, ttk
 from PIL import Image, ImageDraw, ImageTk
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp"}
-SELECTION_BORDER_MARGIN = 6  # canvas px within which a border-hover/resize is detected
-SELECTION_MIN_SIZE = 4       # minimum selection width/height in canvas px while resizing
+SELECTION_BORDER_MARGIN = 6      # canvas px within which a border-hover/resize is detected
+SELECTION_MIN_SIZE = 32          # minimum selection width/height in canvas px, so edges stay grabbable
+SELECTION_CLICK_THRESHOLD = 4    # canvas px of drag movement below which a "new" drag is treated as a plain click
 
 STRAIGHTEN_MAX_ANGLE = 30      # degrees, max tilt in either direction for the Straighten tool
 STRAIGHTEN_HANDLE_MARGIN = 8   # canvas px within which a click/hover grabs a straighten handle
@@ -1139,18 +1140,40 @@ class PhotoEditorApp(tk.Tk):
         self.selection_box = (left, top, right, bottom)
         self._redraw_selection()
 
+    def _grow_to_min_size(self):
+        """Extend a just-drawn selection_box so each axis is at least
+        SELECTION_MIN_SIZE, growing away from the fixed drag anchor
+        (selection_start) and clamped to the displayed image bounds."""
+        off_x, off_y = self.display_offset
+        disp_w = self.current_image.width * self.display_scale
+        disp_h = self.current_image.height * self.display_scale
+        anchor_x, anchor_y = self.selection_start
+        x0, y0, x1, y1 = self.selection_box
+
+        def grow(anchor, moving, lo, hi):
+            if abs(moving - anchor) >= SELECTION_MIN_SIZE:
+                return moving
+            direction = 1 if moving >= anchor else -1
+            return max(lo, min(hi, anchor + direction * SELECTION_MIN_SIZE))
+
+        x1 = grow(anchor_x, x1, off_x, off_x + disp_w)
+        y1 = grow(anchor_y, y1, off_y, off_y + disp_h)
+        self.selection_box = (x0, y0, x1, y1)
+
     def _on_drag_end(self, event):
         if self.straighten_active:
             self._straighten_drag_handle = None
             return
         if self._drag_mode == "new" and self.selection_box is not None:
             x0, y0, x1, y1 = self.selection_box
-            if abs(x1 - x0) < SELECTION_MIN_SIZE or abs(y1 - y0) < SELECTION_MIN_SIZE:
+            if abs(x1 - x0) < SELECTION_CLICK_THRESHOLD or abs(y1 - y0) < SELECTION_CLICK_THRESHOLD:
                 # A plain click (no real drag) or a click outside an existing
                 # selection - don't leave a degenerate selection box behind,
                 # since any non-None selection_box counts as an unsaved change.
                 self.clear_selection()
-                self._redraw_selection()
+            else:
+                self._grow_to_min_size()
+            self._redraw_selection()
         self.selection_start = None
         self._drag_mode = None
         self._on_hover(event)
