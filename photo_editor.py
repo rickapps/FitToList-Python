@@ -90,14 +90,28 @@ def _draw_crop_icon(draw, size, fg):
 
 
 def _draw_straighten_icon(draw, size, fg):
-    pad = size * 0.18
-    tilt = size * 0.12
+    """A tilted line with a handle dot at each end and a small arrow pulling that
+    end vertically - up on the left, down on the right - suggesting the drag
+    that would rotate the line level, distinct from the rotate icons' full-circle
+    arrows."""
+    pad = size * 0.22
+    tilt = size * 0.1
     x0, y0 = pad, size - pad - tilt
     x1, y1 = size - pad, pad + tilt
     draw.line([(x0, y0), (x1, y1)], fill=fg, width=3)
-    r = size * 0.07
-    draw.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], outline=fg, width=2)
-    draw.ellipse([x1 - r, y1 - r, x1 + r, y1 + r], outline=fg, width=2)
+    r = size * 0.045
+    draw.ellipse([x0 - r, y0 - r, x0 + r, y0 + r], fill=fg)
+    draw.ellipse([x1 - r, y1 - r, x1 + r, y1 + r], fill=fg)
+
+    arrow_len = size * 0.24
+    head = size * 0.06
+    for (hx, hy), direction in [((x0, y0), -1), ((x1, y1), 1)]:
+        tip = (hx, hy + direction * arrow_len)
+        draw.line([(hx, hy), tip], fill=fg, width=2)
+        base_angle = 90 if direction < 0 else 270
+        left = _point_on_circle(tip[0], tip[1], head, base_angle + 150)
+        right = _point_on_circle(tip[0], tip[1], head, base_angle - 150)
+        draw.polygon([tip, left, right], fill=fg)
 
 
 def _draw_save_icon(draw, size, fg):
@@ -500,9 +514,7 @@ class PhotoEditorApp(tk.Tk):
 
         actions_menu = tk.Menu(menubar, tearoff=False)
         actions_menu.add_command(label="Crop to Selection", command=self.apply_crop)
-        actions_menu.add_command(
-            label="Straighten", command=self.toggle_straighten, accelerator="Rotates on drag release; click again to cancel"
-        )
+        actions_menu.add_command(label="Straighten", command=self.toggle_straighten)
         actions_menu.add_command(label="Rotate Right", command=self.rotate_right)
         actions_menu.add_command(label="Rotate Left", command=self.rotate_left)
         actions_menu.add_command(label="Reverse Image", command=self.reverse_image)
@@ -842,7 +854,7 @@ class PhotoEditorApp(tk.Tk):
 
     def _has_unsaved_changes(self):
         return self.current_image is not None and (
-            self.is_dirty or self.selection_box is not None or self.straighten_active
+            self.is_dirty or self.selection_box is not None or self.straighten_angle != 0
         )
 
     def _confirm_discard_changes(self):
@@ -992,7 +1004,7 @@ class PhotoEditorApp(tk.Tk):
         if self.straighten_active:
             text = (
                 f"Straighten: {self.straighten_angle:+.1f}°   |   "
-                "Drag either end of the line, double-click to apply, Esc to cancel."
+                "Drag either end of the line to straighten, Esc or click elsewhere to finish."
             )
         elif selection_size:
             text = f"Selection: {selection_size[0]} x {selection_size[1]}   |   Double click to crop and save."
