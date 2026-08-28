@@ -509,6 +509,8 @@ class PhotoEditorApp(tk.Tk):
         file_menu.add_command(label="Max Save Size...", command=self.edit_max_size)
         file_menu.add_command(label="Save", command=self.save)
         file_menu.add_separator()
+        file_menu.add_command(label="Reduce All Images", command=self.reduce_all_images)
+        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.destroy)
         menubar.add_cascade(label="File", menu=file_menu)
 
@@ -1488,6 +1490,84 @@ class PhotoEditorApp(tk.Tk):
         else:
             self._set_message(f"Saved to {path}")
         return True
+
+    # ---------- Reduce All Images ----------
+    def reduce_all_images(self):
+        """Copy every image in the source folder to the processed folder, shrinking
+        any that exceed Max Save Size to fit while leaving smaller ones unchanged -
+        for batch-preparing camera photos for use on web pages. Operates directly on
+        files on disk, independent of whatever image is currently loaded/edited in
+        the app; the tree is refreshed after each file so the user can watch
+        progress as it goes."""
+        if not (self.max_size_enabled and self.max_width and self.max_height):
+            messagebox.showwarning(
+                "Reduce All Images",
+                "Please set a Max Save Size first (File > Max Save Size...).",
+            )
+            return
+        if not self.target_folder or not os.path.isdir(self.target_folder):
+            messagebox.showwarning("Reduce All Images", "Please set a processed folder first.")
+            return
+        try:
+            source_names = sorted(
+                f
+                for f in os.listdir(self.source_folder)
+                if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
+            )
+        except OSError as exc:
+            messagebox.showerror("Error", f"Could not read folder:\n{exc}")
+            return
+        if not source_names:
+            messagebox.showinfo("Reduce All Images", "No images found in the source folder.")
+            return
+        if not messagebox.askyesno(
+            "Reduce All Images",
+            "This copies every image in the source folder to the processed folder, "
+            f"shrinking any larger than the Max Save Size ({self.max_width} x {self.max_height}) "
+            "to fit while leaving smaller ones unchanged - handy for getting camera photos ready "
+            f"for web pages. {len(source_names)} image(s) will be processed. Continue?",
+        ):
+            return
+
+        failures = []
+        for index, name in enumerate(source_names, start=1):
+            source_path = os.path.join(self.source_folder, name)
+            try:
+                image = Image.open(source_path)
+                image.load()
+            except Exception as exc:
+                failures.append(f"{name}: {exc}")
+                continue
+            width, height = image.size
+            scale = min(self.max_width / width, self.max_height / height, 1.0)
+            out_width, out_height = width, height
+            if scale < 1.0:
+                out_width, out_height = max(1, round(width * scale)), max(1, round(height * scale))
+                image = image.resize((out_width, out_height), Image.LANCZOS)
+            root, ext = os.path.splitext(name)
+            if ext.lower() in (".jpg", ".jpeg") and image.mode in ("RGBA", "P"):
+                image = image.convert("RGB")
+            suffix = self._next_suffix(root, ext)
+            out_path = os.path.join(self.target_folder, f"{root}_{suffix:02d}{ext}")
+            try:
+                image.save(out_path)
+            except Exception as exc:
+                failures.append(f"{name}: {exc}")
+                continue
+            self._refresh_processed_children(source_path)
+            self._set_message(f"Reducing {index} of {len(source_names)}: {name}")
+            self.status_name_var.set(f"{name} ({width} x {height})")
+            self.status_output_var.set(f"Save size: {out_width} x {out_height}")
+            self.update_idletasks()
+
+        self._set_message("Reduce All Images complete.")
+        self._update_status()
+        if failures:
+            messagebox.showwarning(
+                "Reduce All Images", "Finished with some errors:\n\n" + "\n".join(failures)
+            )
+        else:
+            messagebox.showinfo("Reduce All Images", f"Processed {len(source_names)} image(s).")
 
     # ---------- Process & Save ----------
     def process_and_save(self):

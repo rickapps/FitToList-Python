@@ -84,6 +84,17 @@
 <h2>7. Max Save Size</h2>
 <p><strong>File &gt; Max Save Size...</strong> (or the link in the top bar) sets an optional maximum width and height applied only when saving. Oversized images are shrunk to fit, preserving aspect ratio; images are never enlarged. This never changes what's shown on screen &mdash; only the saved file. When set, it's shown in the top bar and reflected in the status bar's "Save size."</p>
 
+<h2>8. Reduce All Images</h2>
+<p><strong>File &gt; Reduce All Images</strong> batch-processes the whole source folder in one step &mdash; handy for quickly getting a folder of camera photos ready for use on a web page, without opening and saving each one by hand.</p>
+<ul>
+  <li>Every image in the source folder is copied to the processed folder. Any image larger than the current <strong>Max Save Size</strong> is shrunk to fit (preserving aspect ratio); images already within that size are copied unchanged.</li>
+  <li>Copies are named with the same <code>name_00.ext</code>, <code>name_01.ext</code> auto-numbering as a regular Save, so running it more than once just adds another set of copies instead of overwriting earlier output.</li>
+  <li>The file list updates as each image finishes, so you can watch its progress.</li>
+</ul>
+<div class="tip">
+  Reduce All Images requires a Max Save Size to be set first &mdash; see <strong>Max Save Size</strong> above. If none is set, you'll be prompted to set one before it will run. A confirmation dialog explains what's about to happen before any files are written.
+</div>
+
 <h2>Toolbar reference</h2>
 <table>
   <tr><th>Icon</th><th>Action</th></tr>
