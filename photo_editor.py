@@ -475,6 +475,7 @@ class PhotoEditorApp(tk.Tk):
         self.original_image = None   # PIL.Image as loaded from disk
         self.current_image = None    # PIL.Image after edits
         self.is_dirty = False        # True if current_image has unsaved edits
+        self._overwrite_declined = False  # True if user said No to the last overwrite-save prompt
         self.display_photo = None    # ImageTk.PhotoImage, kept alive for the canvas
         self.display_scale = 1.0
         self.display_offset = (0, 0)
@@ -492,6 +493,13 @@ class PhotoEditorApp(tk.Tk):
         self.icons = build_toolbar_icons()  # kept referenced here so Tkinter doesn't GC them
 
         self.bind("<Escape>", lambda e: self.cancel_straighten())
+        self.bind("<Control-e>", lambda e: self.apply_crop())
+        self.bind("<Control-r>", lambda e: self.rotate_right())
+        self.bind("<Control-l>", lambda e: self.rotate_left())
+        self.bind("<Control-a>", lambda e: self.toggle_straighten())
+        self.bind("<Control-z>", lambda e: self.reset_image())
+        self.bind("<Control-s>", lambda e: self.save())
+        self.bind("<Control-o>", lambda e: self.select_folders())
 
         self._build_menu()
         self._build_layout()
@@ -503,11 +511,11 @@ class PhotoEditorApp(tk.Tk):
         menubar = tk.Menu(self)
 
         file_menu = tk.Menu(menubar, tearoff=False)
-        file_menu.add_command(label="Select Folders...", command=self.select_folders)
+        file_menu.add_command(label="Select Folders...", command=self.select_folders, accelerator="Ctrl+O")
         file_menu.add_command(label="Open Source Folder", command=self.open_source_folder)
         file_menu.add_command(label="Open Processed Folder", command=self.open_processed_folder)
         file_menu.add_command(label="Max Save Size...", command=self.edit_max_size)
-        file_menu.add_command(label="Save", command=self.save)
+        file_menu.add_command(label="Save", command=self.save, accelerator="Ctrl+S")
         file_menu.add_separator()
         file_menu.add_command(label="Reduce All Images", command=self.reduce_all_images)
         file_menu.add_separator()
@@ -515,12 +523,12 @@ class PhotoEditorApp(tk.Tk):
         menubar.add_cascade(label="File", menu=file_menu)
 
         actions_menu = tk.Menu(menubar, tearoff=False)
-        actions_menu.add_command(label="Crop to Selection", command=self.apply_crop)
-        actions_menu.add_command(label="Straighten", command=self.toggle_straighten)
-        actions_menu.add_command(label="Rotate Right", command=self.rotate_right)
-        actions_menu.add_command(label="Rotate Left", command=self.rotate_left)
+        actions_menu.add_command(label="Crop to Selection", command=self.apply_crop, accelerator="Ctrl+E")
+        actions_menu.add_command(label="Straighten", command=self.toggle_straighten, accelerator="Ctrl+A")
+        actions_menu.add_command(label="Rotate Right", command=self.rotate_right, accelerator="Ctrl+R")
+        actions_menu.add_command(label="Rotate Left", command=self.rotate_left, accelerator="Ctrl+L")
         actions_menu.add_command(label="Reverse Image", command=self.reverse_image)
-        actions_menu.add_command(label="Reset", command=self.reset_image)
+        actions_menu.add_command(label="Reset", command=self.reset_image, accelerator="Ctrl+Z")
         actions_menu.add_separator()
         actions_menu.add_command(
             label="Process & Save", command=self.process_and_save, accelerator="Double-click in selection"
@@ -865,6 +873,9 @@ class PhotoEditorApp(tk.Tk):
         or the user chose to discard them), False if the caller should abort."""
         if not self._has_unsaved_changes():
             return True
+        if self._overwrite_declined:
+            # User already said No to overwriting this image via Save - don't ask again.
+            return True
         filename = os.path.basename(self.image_path)
         is_processed = self._is_processed_image(self.image_path)
         if is_processed:
@@ -880,7 +891,7 @@ class PhotoEditorApp(tk.Tk):
             if self.selection_box is not None and not self._crop_to_selection():
                 return False
             # Already confirmed above (with overwrite-specific wording if applicable) - don't ask again.
-            return self._save_current(show_confirmation=False, confirm_overwrite=False)
+            return self._save_current(confirm_overwrite=False)
         return True
 
     # ---------- Image loading / display ----------
@@ -895,6 +906,7 @@ class PhotoEditorApp(tk.Tk):
         self.original_image = image
         self.current_image = image.copy()
         self.is_dirty = False
+        self._overwrite_declined = False
         self.straighten_active = False
         self.straighten_angle = 0.0
         self._straighten_base_image = None
@@ -908,6 +920,7 @@ class PhotoEditorApp(tk.Tk):
         self.original_image = None
         self.current_image = None
         self.is_dirty = False
+        self._overwrite_declined = False
         self.straighten_active = False
         self.straighten_angle = 0.0
         self._straighten_base_image = None
@@ -1009,7 +1022,10 @@ class PhotoEditorApp(tk.Tk):
                 "Drag either end of the line to straighten, Esc or click elsewhere to finish."
             )
         elif selection_size:
-            text = f"Selection: {selection_size[0]} x {selection_size[1]}   |   Double click to crop and save."
+            text = (
+                f"Selection: {selection_size[0]} x {selection_size[1]}   |   "
+                "Ctrl-E to crop OR double click to process and save."
+            )
         else:
             text = self._status_message_base
         self.status_message_var.set(text)
@@ -1240,6 +1256,7 @@ class PhotoEditorApp(tk.Tk):
         box = (int(crop_left), int(crop_top), int(crop_right), int(crop_bottom))
         self.current_image = self.current_image.crop(box)
         self.is_dirty = True
+        self._overwrite_declined = False
         self.clear_selection()
         self._redraw()
         self._set_message("Cropped.")
@@ -1370,6 +1387,7 @@ class PhotoEditorApp(tk.Tk):
             )
             self._straighten_total_angle = total_angle
             self.is_dirty = True
+            self._overwrite_declined = False
         if not keep_active:
             self.straighten_active = False
             self._straighten_base_image = None
@@ -1384,6 +1402,7 @@ class PhotoEditorApp(tk.Tk):
             return
         self.current_image = self.current_image.transpose(Image.ROTATE_270)
         self.is_dirty = True
+        self._overwrite_declined = False
         self.clear_selection()
         self._redraw()
         self._set_message("Rotated right.")
@@ -1393,6 +1412,7 @@ class PhotoEditorApp(tk.Tk):
             return
         self.current_image = self.current_image.transpose(Image.ROTATE_90)
         self.is_dirty = True
+        self._overwrite_declined = False
         self.clear_selection()
         self._redraw()
         self._set_message("Rotated left.")
@@ -1402,6 +1422,7 @@ class PhotoEditorApp(tk.Tk):
             return
         self.current_image = self.current_image.transpose(Image.FLIP_LEFT_RIGHT)
         self.is_dirty = True
+        self._overwrite_declined = False
         self.clear_selection()
         self._redraw()
         self._set_message("Reversed.")
@@ -1412,6 +1433,7 @@ class PhotoEditorApp(tk.Tk):
             return
         self.current_image = self.original_image.copy()
         self.is_dirty = False
+        self._overwrite_declined = False
         self.clear_selection()
         self._redraw()
         self._set_message("Reset to original.")
@@ -1419,7 +1441,7 @@ class PhotoEditorApp(tk.Tk):
     def save(self):
         if self.selection_box is not None and not self._crop_to_selection():
             return
-        self._save_current(show_confirmation=True)
+        self._save_current()
 
     def _next_suffix(self, root, ext):
         """Return the next _NN suffix for root/ext in target_folder (max existing + 1, else 0)."""
@@ -1438,7 +1460,7 @@ class PhotoEditorApp(tk.Tk):
             self.target_folder
         )
 
-    def _save_current(self, show_confirmation, confirm_overwrite=True):
+    def _save_current(self, confirm_overwrite=True):
         """Write current_image to disk. Returns True on success.
 
         A source image is written as a new file in the processed folder using the
@@ -1462,9 +1484,10 @@ class PhotoEditorApp(tk.Tk):
                 confirm_overwrite
                 and self.is_dirty
                 and not messagebox.askyesno(
-                    "Save", f"You have unsaved changes. Overwrite {filename} with your changes?"
+                    "Save", f"Overwrite {filename} with your changes?"
                 )
             ):
+                self._overwrite_declined = True
                 return False
             path = self.image_path
         else:
@@ -1483,12 +1506,10 @@ class PhotoEditorApp(tk.Tk):
             messagebox.showerror("Error", f"Could not save image:\n{exc}")
             return False
         self.is_dirty = False
+        self._overwrite_declined = False
         self._refresh_processed_children(self.image_path)
         self._update_status()
-        if show_confirmation:
-            messagebox.showinfo("Save", f"Saved to {path}")
-        else:
-            self._set_message(f"Saved to {path}")
+        self._set_message(f"{os.path.basename(path)} saved to Processed Folder")
         return True
 
     # ---------- Reduce All Images ----------
@@ -1576,7 +1597,7 @@ class PhotoEditorApp(tk.Tk):
         if self.selection_box is not None and not self._crop_to_selection():
             return
         was_processed = self._is_processed_image(self.image_path)
-        if not self._save_current(show_confirmation=False):
+        if not self._save_current():
             return
         if was_processed:
             # Overwritten in place, not renamed - re-highlight the same node
