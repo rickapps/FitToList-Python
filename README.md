@@ -6,6 +6,8 @@ FitToList is a lightweight desktop tool for cropping and resizing a whole folder
 
 It's aimed at anyone who needs to prep multiple images the same way — for a marketplace listing, a catalog, a website gallery, or similar — rather than at general-purpose photo editing.
 
+A feature-complete C++/Qt port of this app is also available: [FitToList-Cpp](https://github.com/rickapps/FitToList-Cpp). It has no Python/Pillow/Tkinter dependency, and adds an automated test suite this script doesn't have.
+
 ## Features
 
 - **Folder-based batch workflow** — select a source folder and a processed (output) folder once; the file list shows every source image next to the processed versions already saved for it.
